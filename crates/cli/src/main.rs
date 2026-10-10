@@ -1,0 +1,102 @@
+//! `vellum` command-line tool.
+
+use std::{net::SocketAddr, path::PathBuf, process::Command};
+
+use clap::{Parser, Subcommand};
+
+#[derive(Parser)]
+#[command(name = "vellum", version, about = "Build websites and vector graphics")]
+struct Cli {
+    #[command(subcommand)]
+    command: Cmd,
+}
+
+#[derive(Subcommand)]
+enum Cmd {
+    /// Build the editor and serve it against a local project folder.
+    Dev {
+        /// Project folder; the document is saved as `document.json` inside it.
+        #[arg(long, default_value = "project")]
+        dir: PathBuf,
+        #[arg(long, default_value_t = 8080)]
+        port: u16,
+        /// Skip rebuilding the editor (use the existing build).
+        #[arg(long)]
+        no_build: bool,
+    },
+    /// Serve an already built editor (for containers and production).
+    Serve {
+        #[arg(long, default_value = "project")]
+        dir: PathBuf,
+        #[arg(long, default_value = "apps/editor/dist")]
+        editor: PathBuf,
+        #[arg(long, default_value = "0.0.0.0:8080")]
+        addr: SocketAddr,
+    },
+}
+
+/// The editor crate, resolved from this crate's location so `cargo dev` works from any directory.
+fn editor_crate_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../apps/editor")
+}
+
+fn build_editor(editor: &PathBuf) -> Result<(), String> {
+    println!("Building the editor with trunk…");
+    let status = Command::new("trunk")
+        .arg("build")
+        .current_dir(editor)
+        .status()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                "`trunk` was not found. Install it once with:\n  \
+             rustup target add wasm32-unknown-unknown\n  cargo install trunk --locked"
+                    .to_string()
+            } else {
+                format!("could not run trunk: {e}")
+            }
+        })?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err("the editor build failed (see trunk output above)".into())
+    }
+}
+
+#[tokio::main]
+async fn main() {
+    let cli = Cli::parse();
+    let config = match cli.command {
+        Cmd::Dev {
+            dir,
+            port,
+            no_build,
+        } => {
+            let editor = editor_crate_dir();
+            if !no_build {
+                if let Err(e) = build_editor(&editor) {
+                    eprintln!("error: {e}");
+                    std::process::exit(1);
+                }
+            }
+            vellum_server::Config {
+                project_dir: dir,
+                editor_dir: editor.join("dist"),
+                addr: SocketAddr::from(([127, 0, 0, 1], port)),
+            }
+        }
+        Cmd::Serve { dir, editor, addr } => vellum_server::Config {
+            project_dir: dir,
+            editor_dir: editor,
+            addr,
+        },
+    };
+    println!(
+        "Vellum is running at http://{}  (project: {})",
+        config.addr,
+        config.project_dir.display()
+    );
+    if let Err(e) = vellum_server::serve(config).await {
+        eprintln!("error: {e}");
+        std::process::exit(1);
+    }
+}

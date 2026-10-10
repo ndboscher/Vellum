@@ -1,0 +1,3 @@
+[alias]
+# `cargo dev` builds the editor and starts the local server.
+dev = "run -p vellum-cli -- dev"

@@ -1,5 +1,60 @@
 # Vellum
 
-A website builder with a visual page editor, built-in vector (SVG) drawing, and code export to HTML/CSS, React and Vue. Written in Rust.
+A website builder with a drag-and-drop page editor and a built-in SVG vector canvas, written in Rust.
 
 Architecture plan: https://claude.ai/code/artifact/9921d2f7-9929-42e9-b5e3-fecbe660cee4
+
+The editor is [Leptos](https://leptos.dev) compiled to WebAssembly; the server is [Axum](https://github.com/tokio-rs/axum).
+
+## Run it
+
+One-time setup:
+
+```sh
+rustup target add wasm32-unknown-unknown
+cargo install trunk --locked
+```
+
+Then, from the repo root:
+
+```sh
+cargo dev
+```
+
+This builds the editor and serves it at http://127.0.0.1:8080. Your page is saved to `project/document.json`
+(change the folder with `cargo dev -- --dir path/to/site`).
+
+| Command | What it does |
+| --- | --- |
+| `cargo dev` | Build the editor and serve it against a local project folder |
+| `cargo run -p vellum-cli -- serve` | Serve an already built editor (for containers) |
+| `cargo test --workspace` | Run the unit tests |
+| `trunk serve` (in `apps/editor`) | Hot-reload the editor while working on it; proxies `/api` to a running `vellum serve` |
+
+## What's here
+
+**Page editor**
+- Drag blocks (heading, text, button, image, spacer, vector graphic) from the palette onto the page, or click to append.
+- Drag blocks on the page to reorder; select one to edit its content, alignment, colors and padding.
+- Undo/redo (Ctrl+Z, Ctrl+Shift+Z) and automatic saving.
+
+**Vector canvas**
+- Tools: select (V), pen (P), rectangle (R), ellipse (E), line (L).
+- Pen: click for corners, click-and-drag for bezier curves, click the first point to close, Enter or double-click to leave the path open.
+- Select a shape to move it, restyle its fill and stroke, or delete it.
+- **Add to page** drops the drawing into the page as a vector block; **Edit in vector canvas** on that block reopens it. **Export SVG** downloads it.
+
+## Layout
+
+```
+apps/
+  editor/     Leptos (WASM): page editor, vector canvas, inspector
+  server/     Axum: serves the editor, loads and saves the project document
+crates/
+  schema/     The page document types (serde) shared by everything
+  core/       Editing operations and undo/redo, testable without a browser
+  vector/     Path data, shape geometry and SVG output
+  cli/        The `vellum` command (`dev`, `serve`)
+```
+
+Exporters (HTML/CSS, React, ...) build on `vellum-schema` as separate `export-*` crates.

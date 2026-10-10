@@ -1,0 +1,9 @@
+[package]
+name = "vellum-vector"
+description = "Vector geometry for Vellum: path data, hit-free transforms and SVG serialization."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+vellum-schema.workspace = true
