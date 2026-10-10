@@ -1,0 +1,29 @@
+---
+source: crates/export-react/tests/react.rs
+expression: "result.file(\"src/Page.jsx\").unwrap().contents"
+---
+import "./Page.css";
+
+export default function Page() {
+  return (
+    <main className="page">
+      <h1 className="blk-heading heading">{"Build sites <fast>"}</h1>
+      <p className="blk-text text">{"Drag blocks, draw a {logo}, export.\nThen ship it."}</p>
+      <div className="button">
+        <a className="blk-button" href="/signup">Get started</a>
+      </div>
+      <div className="blk-spacer spacer" aria-hidden="true" />
+      <div className="image">
+        <img className="blk-image" src="hero.png" alt={"Screenshot of the \"editor\""} />
+      </div>
+      <div className="vector">
+        <svg className="blk-vector" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100" role="img" aria-label="Vector graphic">
+          <rect x="10" y="10" width="80" height="60" fill="#7c5cff" stroke="#1f1b2e" strokeWidth="2" />
+          <ellipse cx="140" cy="40" rx="30" ry="20" fill="#f4c542" stroke="#1f1b2e" strokeWidth="1.5" />
+          <line x1="10" y1="90" x2="190" y2="90" fill="none" stroke="#1f1b2e" strokeWidth="3" strokeLinecap="round" />
+          <path d="M100 80 C100 80 130 60 160 80" fill="none" stroke="#6d4aff" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+        </svg>
+      </div>
+    </main>
+  );
+}

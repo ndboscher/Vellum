@@ -1,0 +1,35 @@
+---
+source: crates/export-html/tests/html.rs
+expression: "result.file(\"index.html\").unwrap().contents"
+---
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Alpaca &amp; Co</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="page">
+    <h1 class="blk-heading heading">Build sites &lt;fast&gt;</h1>
+    <p class="blk-text text">Drag blocks, draw a {logo}, export.
+Then ship it.</p>
+    <div class="button">
+      <a class="blk-button" href="/signup">Get started</a>
+    </div>
+    <div class="blk-spacer spacer" aria-hidden="true"></div>
+    <div class="image">
+      <img class="blk-image" src="hero.png" alt="Screenshot of the &quot;editor&quot;">
+    </div>
+    <div class="vector">
+      <svg class="blk-vector" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100" role="img" aria-label="Vector graphic">
+        <rect x="10" y="10" width="80" height="60" fill="#7c5cff" stroke="#1f1b2e" stroke-width="2"></rect>
+        <ellipse cx="140" cy="40" rx="30" ry="20" fill="#f4c542" stroke="#1f1b2e" stroke-width="1.5"></ellipse>
+        <line x1="10" y1="90" x2="190" y2="90" fill="none" stroke="#1f1b2e" stroke-width="3" stroke-linecap="round"></line>
+        <path d="M100 80 C100 80 130 60 160 80" fill="none" stroke="#6d4aff" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"></path>
+      </svg>
+    </div>
+  </main>
+</body>
+</html>

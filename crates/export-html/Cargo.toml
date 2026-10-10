@@ -1,0 +1,15 @@
+[package]
+name = "vellum-export-html"
+description = "Static HTML + CSS export target."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+vellum-schema.workspace = true
+vellum-export-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+insta.workspace = true

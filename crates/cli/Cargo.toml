@@ -1,6 +1,6 @@
 [package]
 name = "vellum-cli"
-description = "The `vellum` command: dev server and (later) export."
+description = "The `vellum` command: dev server, serving and code export."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,5 +11,10 @@ path = "src/main.rs"
 
 [dependencies]
 vellum-server.workspace = true
+vellum-schema.workspace = true
+vellum-export-core.workspace = true
+vellum-export-html.workspace = true
+vellum-export-react.workspace = true
+serde_json.workspace = true
 clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

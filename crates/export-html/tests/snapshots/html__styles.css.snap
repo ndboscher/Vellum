@@ -1,0 +1,88 @@
+---
+source: crates/export-html/tests/html.rs
+expression: "result.file(\"styles.css\").unwrap().contents"
+---
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  color: #1f1b2e;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+.page {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 24px 0;
+  background: #fff;
+}
+
+.blk-heading,
+.blk-text {
+  margin: 0;
+}
+
+.blk-text {
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.blk-button {
+  display: inline-block;
+  padding: 10px 20px;
+  border-radius: 8px;
+  background: #6d4aff;
+  color: #fff;
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.blk-image {
+  max-width: 100%;
+  display: inline-block;
+  border-radius: 6px;
+}
+
+.blk-vector {
+  width: 100%;
+  max-width: 480px;
+  height: auto;
+}
+
+.heading {
+  text-align: center;
+  color: #1f1b2e;
+  padding: 24px;
+}
+
+.text {
+  text-align: left;
+  color: #4a4560;
+  background: #f4f3f8;
+  padding: 16px;
+}
+
+.button {
+  text-align: center;
+  color: #1f1b2e;
+  padding: 16px;
+}
+
+.spacer {
+  height: 32px;
+  background: transparent;
+}
+
+.image {
+  text-align: center;
+  color: #1f1b2e;
+  padding: 16px;
+}
+
+.vector {
+  text-align: center;
+  color: #1f1b2e;
+  padding: 16px;
+}
