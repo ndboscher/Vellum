@@ -1,0 +1,7 @@
+[build]
+target = "index.html"
+dist = "dist"
+
+# `trunk serve` alone has no backend; forward the document API to `vellum serve` if it is running.
+[[proxy]]
+backend = "http://127.0.0.1:8080/api/"

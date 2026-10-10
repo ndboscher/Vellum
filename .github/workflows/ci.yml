@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo clippy -p vellum-editor --target wasm32-unknown-unknown -- -D warnings
+      - run: cargo test --workspace
+      - uses: jetli/trunk-action@v0.5.0
+        with:
+          version: v0.21.14
+      - name: Build the editor
+        run: trunk build --release
+        working-directory: apps/editor
