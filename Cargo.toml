@@ -1,6 +1,16 @@
 [workspace]
 resolver = "2"
-members = ["crates/schema", "crates/vector", "crates/core", "crates/cli", "apps/editor", "apps/server"]
+members = [
+    "crates/schema",
+    "crates/vector",
+    "crates/core",
+    "crates/export-core",
+    "crates/export-html",
+    "crates/export-react",
+    "crates/cli",
+    "apps/editor",
+    "apps/server",
+]
 
 [workspace.package]
 version = "0.1.0"
@@ -12,9 +22,13 @@ rust-version = "1.85"
 vellum-schema = { path = "crates/schema" }
 vellum-vector = { path = "crates/vector" }
 vellum-core = { path = "crates/core" }
+vellum-export-core = { path = "crates/export-core" }
+vellum-export-html = { path = "crates/export-html" }
+vellum-export-react = { path = "crates/export-react" }
 vellum-server = { path = "apps/server" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+insta = "1"
 
 [profile.release.package.vellum-editor]
 opt-level = "z"

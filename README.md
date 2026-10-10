@@ -28,6 +28,7 @@ This builds the editor and serves it at http://127.0.0.1:8080. Your page is save
 | --- | --- |
 | `cargo dev` | Build the editor and serve it against a local project folder |
 | `cargo run -p vellum-cli -- serve` | Serve an already built editor (for containers) |
+| `cargo run -p vellum-cli -- export --target react` | Export `project/document.json` as code into `export/` (`--list` shows targets) |
 | `cargo test --workspace` | Run the unit tests |
 | `trunk serve` (in `apps/editor`) | Hot-reload the editor while working on it; proxies `/api` to a running `vellum serve` |
 
@@ -54,7 +55,10 @@ crates/
   schema/     The page document types (serde) shared by everything
   core/       Editing operations and undo/redo, testable without a browser
   vector/     Path data, shape geometry and SVG output
-  cli/        The `vellum` command (`dev`, `serve`)
+  export-core/   Exporter trait, registry, shared markup and CSS generation
+  export-html/   Static HTML + CSS target
+  export-react/  React (JSX/TSX) target
+  cli/        The `vellum` command (`dev`, `serve`, `export`)
 ```
 
-Exporters (HTML/CSS, React, ...) build on `vellum-schema` as separate `export-*` crates.
+New export targets are new `export-*` crates; see `crates/export-core/README.md`.

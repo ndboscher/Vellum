@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "title": "Alpaca & Co",
+  "nodes": [
+    {
+      "id": "title",
+      "type": "heading",
+      "level": 1,
+      "text": "Build sites <fast>",
+      "style": { "align": "center", "color": "#1f1b2e", "background": null, "padding": 24 }
+    },
+    {
+      "id": "intro",
+      "type": "text",
+      "text": "Drag blocks, draw a {logo}, export.\nThen ship it.",
+      "style": { "align": "left", "color": "#4a4560", "background": "#f4f3f8", "padding": 16 }
+    },
+    {
+      "id": "cta",
+      "type": "button",
+      "label": "Get started",
+      "href": "/signup",
+      "style": { "align": "center", "color": "#1f1b2e", "background": null, "padding": 16 }
+    },
+    { "id": "gap", "type": "spacer", "height": 32, "style": { "align": "left", "color": "#1f1b2e", "background": null, "padding": 16 } },
+    {
+      "id": "shot",
+      "type": "image",
+      "src": "hero.png",
+      "alt": "Screenshot of the \"editor\"",
+      "style": { "align": "center", "color": "#1f1b2e", "background": null, "padding": 16 }
+    },
+    {
+      "id": "logo",
+      "type": "svg",
+      "drawing": {
+        "width": 200,
+        "height": 100,
+        "shapes": [
+          { "id": "r", "kind": "rect", "x": 10, "y": 10, "w": 80, "h": 60, "style": { "fill": "#7c5cff", "stroke": "#1f1b2e", "stroke_width": 2 } },
+          { "id": "e", "kind": "ellipse", "cx": 140, "cy": 40, "rx": 30, "ry": 20, "style": { "fill": "#f4c542", "stroke": "#1f1b2e", "stroke_width": 1.5 } },
+          { "id": "l", "kind": "line", "x1": 10, "y1": 90, "x2": 190, "y2": 90, "style": { "fill": "#000", "stroke": "#1f1b2e", "stroke_width": 3 } },
+          {
+            "id": "p",
+            "kind": "path",
+            "closed": false,
+            "nodes": [{ "x": 100, "y": 80 }, { "x": 160, "y": 80, "handle_in": { "x": 130, "y": 60 } }],
+            "style": { "fill": "#7c5cff", "stroke": "#6d4aff", "stroke_width": 2 }
+          }
+        ]
+      },
+      "style": { "align": "center", "color": "#1f1b2e", "background": null, "padding": 16 }
+    }
+  ]
+}
