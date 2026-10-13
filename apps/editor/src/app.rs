@@ -8,6 +8,7 @@ use vellum_core::starter_document;
 use crate::page::PageEditor;
 use crate::persistence;
 use crate::store::{is_typing, new_id, Store, View};
+use crate::tokens::StylesView;
 use crate::vector::VectorCanvas;
 
 #[component]
@@ -26,7 +27,7 @@ pub fn App() -> impl IntoView {
 
     let keys = window_event_listener(ev::keydown, move |ev| {
         if is_typing(&ev)
-            || store.view.get_untracked() != View::Page
+            || store.view.get_untracked() == View::Vector
             || !(ev.ctrl_key() || ev.meta_key())
         {
             return;
@@ -53,7 +54,8 @@ pub fn App() -> impl IntoView {
         <div class="app">
             <header class="topbar">
                 <span class="brand">"Vellum"</span>
-                <nav class="tabs">{tab(View::Page, "Page")} {tab(View::Vector, "Vector")}</nav>
+                <nav class="tabs">{tab(View::Page, "Page")} {tab(View::Vector, "Vector")} {tab(View::Styles, "Styles")}
+                </nav>
                 <div class="row">
                     <button
                         type="button"
@@ -72,11 +74,20 @@ pub fn App() -> impl IntoView {
                         "Redo"
                     </button>
                 </div>
+                <button
+                    type="button"
+                    title="Preview the page with dark color values"
+                    class:active=move || store.dark_preview.get()
+                    on:click=move |_| store.dark_preview.update(|d| *d = !*d)
+                >
+                    {move || if store.dark_preview.get() { "Dark" } else { "Light" }}
+                </button>
                 <span class="status">{move || store.save_status.get()}</span>
             </header>
             {move || match store.view.get() {
                 View::Page => view! { <PageEditor /> }.into_any(),
                 View::Vector => view! { <VectorCanvas /> }.into_any(),
+                View::Styles => view! { <StylesView /> }.into_any(),
             }}
         </div>
     }

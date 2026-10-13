@@ -2,10 +2,40 @@
 source: crates/export-html/tests/html.rs
 expression: "result.file(\"styles.css\").unwrap().contents"
 ---
+:root {
+  --color-text: #1f1b2e;
+  --color-muted: #6b6780;
+  --color-background: #ffffff;
+  --color-surface: #f4f3f8;
+  --color-accent: #6d4aff;
+  --color-on-accent: #ffffff;
+  --font-display: 800 48px/1.1 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-heading: 700 28px/1.25 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-body: 400 16px/1.6 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-small: 400 13px/1.5 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 48px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-text: #f4f3f8;
+    --color-muted: #a7a3b8;
+    --color-background: #15131c;
+    --color-surface: #221f2c;
+    --color-accent: #9d85ff;
+    --color-on-accent: #15131c;
+  }
+}
+
 body {
   margin: 0;
   font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  color: #1f1b2e;
+  color: var(--color-text, #1f1b2e);
+  background: var(--color-background, #fff);
 }
 
 * {
@@ -16,7 +46,7 @@ body {
   max-width: 880px;
   margin: 0 auto;
   padding: 24px 0;
-  background: #fff;
+  background: var(--color-background, #fff);
 }
 
 .blk-heading,
@@ -33,8 +63,8 @@ body {
   display: inline-block;
   padding: 10px 20px;
   border-radius: 8px;
-  background: #6d4aff;
-  color: #fff;
+  background: var(--color-accent, #6d4aff);
+  color: var(--color-on-accent, #fff);
   text-decoration: none;
   font-weight: 600;
 }
@@ -53,8 +83,9 @@ body {
 
 .heading {
   text-align: center;
-  color: #1f1b2e;
-  padding: 24px;
+  color: var(--color-text);
+  padding: var(--space-lg);
+  font: var(--font-display);
 }
 
 .text {
@@ -85,4 +116,47 @@ body {
   text-align: center;
   color: #1f1b2e;
   padding: 16px;
+}
+
+.grid {
+  text-align: left;
+  color: var(--color-text);
+  background: var(--color-surface);
+  padding: var(--space-xl);
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-lg);
+  align-items: flex-start;
+}
+
+.text-2 {
+  text-align: left;
+  color: var(--color-muted);
+  padding: var(--space-sm);
+  font: var(--font-body);
+}
+
+.text-3 {
+  text-align: left;
+  color: var(--color-muted);
+  padding: var(--space-sm);
+  font: var(--font-body);
+}
+
+.row {
+  text-align: left;
+  color: var(--color-text);
+  padding: 0px;
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.button-2 {
+  text-align: left;
+  color: var(--color-text);
+  padding: 0px;
 }

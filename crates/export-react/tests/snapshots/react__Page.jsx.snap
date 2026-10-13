@@ -24,6 +24,15 @@ export default function Page() {
           <path d="M100 80 C100 80 130 60 160 80" fill="none" stroke="#6d4aff" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
         </svg>
       </div>
+      <div className="blk-container grid">
+        <p className="blk-text text-2">Design tokens</p>
+        <p className="blk-text text-3">Flex and grid</p>
+        <div className="blk-container row">
+          <div className="button-2">
+            <a className="blk-button" href="/docs">Learn more</a>
+          </div>
+        </div>
+      </div>
     </main>
   );
 }
