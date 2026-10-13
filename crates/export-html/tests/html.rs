@@ -30,7 +30,7 @@ fn can_inline_the_stylesheet() {
     let result = export_html(&landing(), &HtmlOptions { inline_css: true });
     assert_eq!(result.files.len(), 1);
     let html = &result.file("index.html").unwrap().contents;
-    assert!(html.contains("<style>\n    body {\n      margin: 0;"));
+    assert!(html.contains("<style>\n    :root {\n      --color-text: #1f1b2e;"));
     assert!(!html.contains("styles.css"));
 }
 

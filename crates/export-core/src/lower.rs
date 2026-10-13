@@ -5,10 +5,15 @@
 //! URL sanitizing and style serialization live in one place. The markup and base
 //! styles mirror the editor's canvas (`apps/editor/src/page.rs` and
 //! `apps/editor/style.css`) so an export looks like what the user built.
+//! Per-node declarations come from `vellum_schema` ([`Style::declarations`],
+//! [`Layout::declarations`], [`Tokens::variables`]), which the canvas uses too.
+//!
+//! [`Layout::declarations`]: vellum_schema::Layout::declarations
+//! [`Tokens::variables`]: vellum_schema::Tokens::variables
 
 use std::collections::HashSet;
 
-use vellum_schema::{Document, Drawing, Geometry, Node, NodeKind, Shape, Style};
+use vellum_schema::{css, Document, Drawing, Geometry, Node, NodeKind, Shape, Style};
 use vellum_vector::path_data;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -27,6 +32,8 @@ pub struct Element {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CssRule {
+    /// An enclosing at-rule such as `@media (prefers-color-scheme: dark)`.
+    pub media: Option<String>,
     pub selector: String,
     pub declarations: Vec<(String, String)>,
 }
@@ -35,7 +42,8 @@ pub struct CssRule {
 pub struct LoweredPage {
     /// The page root: a `<main class="page">` holding every block.
     pub root: Element,
-    /// Base rules shared by every export, then one rule per block.
+    /// Design tokens as custom properties, base rules shared by every export, then one rule
+    /// per node.
     pub rules: Vec<CssRule>,
 }
 
@@ -51,7 +59,8 @@ const BASE_RULES: &[(&str, &[(&str, &str)])] = &[
                 "font-family",
                 "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
             ),
-            ("color", "#1f1b2e"),
+            ("color", "var(--color-text, #1f1b2e)"),
+            ("background", "var(--color-background, #fff)"),
         ],
     ),
     ("*", &[("box-sizing", "border-box")]),
@@ -61,7 +70,7 @@ const BASE_RULES: &[(&str, &[(&str, &str)])] = &[
             ("max-width", "880px"),
             ("margin", "0 auto"),
             ("padding", "24px 0"),
-            ("background", "#fff"),
+            ("background", "var(--color-background, #fff)"),
         ],
     ),
     (".blk-heading,\n.blk-text", &[("margin", "0")]),
@@ -75,8 +84,8 @@ const BASE_RULES: &[(&str, &[(&str, &str)])] = &[
             ("display", "inline-block"),
             ("padding", "10px 20px"),
             ("border-radius", "8px"),
-            ("background", "#6d4aff"),
-            ("color", "#fff"),
+            ("background", "var(--color-accent, #6d4aff)"),
+            ("color", "var(--color-on-accent, #fff)"),
             ("text-decoration", "none"),
             ("font-weight", "600"),
         ],
@@ -100,16 +109,35 @@ const BASE_RULES: &[(&str, &[(&str, &str)])] = &[
 ];
 
 pub fn lower_document(doc: &Document) -> LoweredPage {
-    let mut rules: Vec<CssRule> = BASE_RULES
-        .iter()
-        .map(|(selector, declarations)| CssRule {
+    let variables = |vars: Vec<(String, String)>| -> Vec<(String, String)> {
+        vars.into_iter()
+            .filter_map(|(p, v)| declaration(&p, v))
+            .collect()
+    };
+    let mut rules = vec![CssRule {
+        media: None,
+        selector: ":root".into(),
+        declarations: variables(doc.tokens.variables(false)),
+    }];
+    let dark = variables(doc.tokens.dark_overrides());
+    if !dark.is_empty() {
+        rules.push(CssRule {
+            media: Some("@media (prefers-color-scheme: dark)".into()),
+            selector: ":root".into(),
+            declarations: dark,
+        });
+    }
+    rules.retain(|r| !r.declarations.is_empty());
+    rules.extend(BASE_RULES.iter().map(|(selector, declarations)| {
+        CssRule {
+            media: None,
             selector: (*selector).to_owned(),
             declarations: declarations
                 .iter()
                 .map(|(p, v)| ((*p).to_owned(), (*v).to_owned()))
                 .collect(),
-        })
-        .collect();
+        }
+    }));
     let mut namer = ClassNamer::default();
     let children = doc
         .nodes
@@ -123,9 +151,10 @@ pub fn lower_document(doc: &Document) -> LoweredPage {
 }
 
 fn lower_node(node: &Node, namer: &mut ClassNamer, rules: &mut Vec<CssRule>) -> Element {
-    let label = match node.kind {
+    let label = match &node.kind {
         // `.svg` would read like an element selector in the stylesheet.
         NodeKind::Svg { .. } => "vector",
+        NodeKind::Container { layout, .. } => layout.label(),
         _ => node.kind.type_name(),
     };
     let class_name = namer.name(label);
@@ -137,13 +166,23 @@ fn lower_node(node: &Node, namer: &mut ClassNamer, rules: &mut Vec<CssRule>) -> 
                 node.style
                     .background
                     .as_deref()
-                    .unwrap_or("transparent")
-                    .to_owned(),
+                    .map_or("transparent".into(), css::color),
             ),
         ],
+        NodeKind::Container { layout, .. } => {
+            let mut out = block_declarations(&node.style);
+            out.extend(
+                layout
+                    .declarations()
+                    .into_iter()
+                    .map(|(p, v)| declaration(p, v)),
+            );
+            out
+        }
         _ => block_declarations(&node.style),
     };
     rules.push(CssRule {
+        media: None,
         selector: format!(".{class_name}"),
         declarations: declarations.into_iter().flatten().collect(),
     });
@@ -206,19 +245,22 @@ fn lower_node(node: &Node, namer: &mut ClassNamer, rules: &mut Vec<CssRule>) -> 
             vec![],
         ),
         NodeKind::Svg { drawing } => wrap(lower_drawing(drawing)),
+        NodeKind::Container { children, .. } => {
+            let children = children
+                .iter()
+                .map(|child| OutputNode::Element(lower_node(child, namer, rules)))
+                .collect();
+            block("div", "blk-container", vec![], children)
+        }
     }
 }
 
 fn block_declarations(style: &Style) -> Vec<Option<(String, String)>> {
-    let mut out = vec![
-        declaration("text-align", style.align.as_css().to_owned()),
-        declaration("color", style.color.clone()),
-    ];
-    if let Some(background) = &style.background {
-        out.push(declaration("background", background.clone()));
-    }
-    out.push(declaration("padding", format!("{}px", fmt(style.padding))));
-    out
+    style
+        .declarations()
+        .into_iter()
+        .map(|(p, v)| declaration(p, v))
+        .collect()
 }
 
 /// A CSS declaration, or `None` when the value could break out of its rule.
@@ -315,12 +357,7 @@ fn element(
 
 /// Rounds to two decimals and drops a trailing `.0`, matching `vellum-vector`'s SVG output.
 pub fn fmt(n: f64) -> String {
-    let r = (n * 100.0).round() / 100.0;
-    if r == 0.0 {
-        "0".into()
-    } else {
-        format!("{r}")
-    }
+    css::number(n)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -404,7 +441,14 @@ pub fn print_css(rules: &[CssRule]) -> String {
                 .iter()
                 .map(|(p, v)| format!("  {p}: {v};\n"))
                 .collect();
-            format!("{} {{\n{body}}}\n", rule.selector)
+            let rule_text = format!("{} {{\n{body}}}\n", rule.selector);
+            match &rule.media {
+                None => rule_text,
+                Some(media) => {
+                    let inner: String = rule_text.lines().map(|l| format!("  {l}\n")).collect();
+                    format!("{media} {{\n{inner}}}\n")
+                }
+            }
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -438,6 +482,7 @@ mod tests {
         let style = Style {
             color: "red; } body { display: none".into(),
             background: Some("#fff".into()),
+            padding: vellum_schema::Length::Px(16.0),
             ..Style::default()
         };
         let declarations: Vec<_> = block_declarations(&style).into_iter().flatten().collect();
@@ -449,6 +494,50 @@ mod tests {
                 ("padding".to_owned(), "16px".to_owned()),
             ]
         );
+    }
+
+    #[test]
+    fn drops_token_values_that_could_escape_a_rule() {
+        let mut doc = Document::default();
+        doc.tokens.colors[0].light = "red; } body { display: none".into();
+        doc.tokens.fonts[0].family = "x</style><script>".into();
+        let page = lower_document(&doc);
+        let css = print_css(&page.rules);
+        assert!(!css.contains("display: none"));
+        assert!(!css.contains("<script>"));
+        assert!(css.contains("--color-muted: #6b6780;"));
+    }
+
+    #[test]
+    fn nests_containers_and_wraps_dark_overrides_in_a_media_query() {
+        let mut doc = Document::default();
+        use vellum_schema::Layout;
+        let mut row = Node {
+            id: "r".into(),
+            style: Style::default(),
+            kind: NodeKind::Container {
+                layout: Layout::row(),
+                children: vec![],
+            },
+        };
+        row.children_mut().unwrap().push(Node {
+            id: "t".into(),
+            style: Style::default(),
+            kind: NodeKind::Text { text: "hi".into() },
+        });
+        doc.nodes.push(row);
+        let page = lower_document(&doc);
+        let OutputNode::Element(row) = &page.root.children[0] else {
+            panic!("row element");
+        };
+        assert_eq!(row.attrs[0], ("class", "blk-container row".into()));
+        assert!(matches!(&row.children[0], OutputNode::Element(e) if e.tag == "p"));
+        let css = print_css(&page.rules);
+        assert!(css.contains(
+            "@media (prefers-color-scheme: dark) {\n  :root {\n    --color-text: #f4f3f8;"
+        ));
+        assert!(css.contains(".row {\n  text-align: left;"));
+        assert!(css.contains("  display: flex;\n  flex-direction: row;"));
     }
 
     #[test]

@@ -8,6 +8,7 @@ use vellum_schema::{Document, Drawing, NodeId};
 pub enum View {
     Page,
     Vector,
+    Styles,
 }
 
 #[derive(Clone, Copy)]
@@ -23,6 +24,8 @@ pub struct Store {
     pub loaded: RwSignal<bool>,
     pub save_status: RwSignal<&'static str>,
     pub view: RwSignal<View>,
+    /// Show the page with the dark values of color tokens.
+    pub dark_preview: RwSignal<bool>,
     /// The drawing open in the vector canvas.
     pub drawing: RwSignal<Drawing>,
     /// The page block the open drawing belongs to, if it was opened from one.
@@ -40,6 +43,7 @@ impl Store {
             loaded: RwSignal::new(false),
             save_status: RwSignal::new("Loading…"),
             view: RwSignal::new(View::Page),
+            dark_preview: RwSignal::new(false),
             drawing: RwSignal::new(drawing),
             editing_node: RwSignal::new(None),
         }

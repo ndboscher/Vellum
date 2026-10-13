@@ -5,7 +5,7 @@ use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{Element, PointerEvent};
 
-use vellum_core::{index_of, insert};
+use vellum_core::{find, find_mut, insert};
 use vellum_schema::{Geometry, Node, NodeKind, PathNode, Point, Shape, ShapeStyle, Style};
 use vellum_vector::{
     drawing_to_svg, ellipse_from_drag, is_meaningful, line_from_drag, path_data, pull_handles,
@@ -252,13 +252,14 @@ pub fn VectorCanvas() -> impl IntoView {
 
     let save_to_page = move |_| {
         let d = drawing.get_untracked();
-        let target = store
-            .editing_node
-            .get_untracked()
-            .filter(|id| store.doc.with_untracked(|doc| index_of(doc, id).is_some()));
+        let target = store.editing_node.get_untracked().filter(|id| {
+            store
+                .doc
+                .with_untracked(|doc| find(&doc.nodes, id).is_some())
+        });
         match target {
             Some(id) => store.commit(|doc| {
-                if let Some(n) = doc.nodes.iter_mut().find(|n| n.id == id) {
+                if let Some(n) = find_mut(&mut doc.nodes, &id) {
                     n.kind = NodeKind::Svg { drawing: d };
                 }
             }),
@@ -274,7 +275,7 @@ pub fn VectorCanvas() -> impl IntoView {
                 store.editing_node.set(Some(node.id.clone()));
                 store.commit(|doc| {
                     let end = doc.nodes.len();
-                    insert(doc, node, end);
+                    insert(doc, None, end, node);
                 });
             }
         }

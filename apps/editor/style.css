@@ -178,7 +178,9 @@ kbd {
   width: 100%;
   max-width: 880px;
   min-height: 100%;
-  background: #fff;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  color: var(--color-text, #1f1b2e);
+  background: var(--color-background, #fff);
   box-shadow: 0 1px 3px rgb(0 0 0 / 0.08);
   padding: 24px 0;
 }
@@ -217,12 +219,6 @@ kbd {
 .block.selected .block-tag {
   opacity: 1;
 }
-.drop-line {
-  height: 3px;
-  margin: 0 16px;
-  background: var(--accent);
-  border-radius: 2px;
-}
 
 .blk-heading,
 .blk-text {
@@ -236,8 +232,8 @@ kbd {
   display: inline-block;
   padding: 10px 20px;
   border-radius: 8px;
-  background: var(--accent);
-  color: #fff;
+  background: var(--color-accent, #6d4aff);
+  color: var(--color-on-accent, #fff);
   text-decoration: none;
   font-weight: 600;
 }
@@ -301,4 +297,174 @@ kbd {
 }
 .inspector h3 {
   text-transform: capitalize;
+}
+
+/* Nested layout. `.blk-container` itself carries only the node's inline style, as in exports. */
+.block.drop-before::before,
+.block.drop-after::after {
+  content: '';
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  height: 3px;
+  background: var(--accent);
+  border-radius: 2px;
+  z-index: 1;
+  pointer-events: none;
+}
+.block.drop-before::before {
+  top: -2px;
+}
+.block.drop-after::after {
+  bottom: -2px;
+}
+.block.horizontal.drop-before::before,
+.block.horizontal.drop-after::after {
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  height: auto;
+}
+.block.horizontal.drop-before::before {
+  left: -2px;
+  right: auto;
+}
+.block.horizontal.drop-after::after {
+  right: -2px;
+  left: auto;
+}
+.block.drop-into {
+  outline: 2px dashed var(--accent);
+  outline-offset: -2px;
+}
+.block .blk-container {
+  min-height: 48px;
+}
+.block .blk-container > .block {
+  outline: 1px dashed var(--border);
+}
+.block .blk-container > .block.selected {
+  outline: 2px solid var(--accent);
+}
+.container-empty {
+  flex: 1;
+  grid-column: 1 / -1;
+  padding: 16px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--muted);
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+}
+.fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.hidden {
+  display: none;
+}
+.invisible {
+  visibility: hidden;
+}
+.field .row select {
+  flex: 1;
+  min-width: 0;
+}
+.field .row input[type='range'] {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Styles view */
+.styles-view {
+  flex: 1;
+  overflow-y: auto;
+  padding: 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  align-items: center;
+}
+.token-section {
+  width: 100%;
+  max-width: 760px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: flex-start;
+}
+.token-section h2 {
+  margin: 0 0 4px;
+  font-size: 16px;
+}
+.token-row,
+.token-head {
+  width: 100%;
+  display: grid;
+  gap: 10px;
+  align-items: center;
+}
+.token-row.colors,
+.token-head.colors {
+  grid-template-columns: 28px 1fr 64px 64px 32px;
+}
+.token-head {
+  font-size: 12px;
+  color: var(--muted);
+}
+.token-row.fonts {
+  grid-template-columns: 1fr 2fr;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+.token-row.fonts .row {
+  grid-column: 1 / -1;
+}
+.token-row.fonts input[type='text'] {
+  flex: 1;
+}
+.token-row.fonts input[type='number'] {
+  width: 72px;
+}
+.token-row.spacing {
+  grid-template-columns: 1fr 80px 1fr 32px;
+}
+.token-row input:not([type='color']) {
+  font: inherit;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  min-width: 0;
+}
+.token-row input[type='color'] {
+  width: 100%;
+  height: 32px;
+}
+.swatch {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+.type-preview {
+  margin: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.space-bar {
+  height: 12px;
+  max-width: 100%;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+}
+.topbar button.active {
+  background: var(--accent-soft);
+  color: var(--accent);
 }

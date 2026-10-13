@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "title": "Alpaca & Co",
   "nodes": [
     {
@@ -7,7 +7,7 @@
       "type": "heading",
       "level": 1,
       "text": "Build sites <fast>",
-      "style": { "align": "center", "color": "#1f1b2e", "background": null, "padding": 24 }
+      "style": { "align": "center", "color": "{text}", "background": null, "padding": "{lg}", "font": "display" }
     },
     {
       "id": "intro",
@@ -50,6 +50,26 @@
         ]
       },
       "style": { "align": "center", "color": "#1f1b2e", "background": null, "padding": 16 }
+    }
+  ,
+    {
+      "id": "features",
+      "type": "container",
+      "layout": { "mode": "grid", "direction": "column", "wrap": false, "columns": 3, "gap": "{lg}", "align": "start", "justify": "start" },
+      "style": { "align": "left", "color": "{text}", "background": "{surface}", "padding": "{xl}" },
+      "children": [
+        { "id": "f1", "type": "text", "text": "Design tokens", "style": { "align": "left", "color": "{muted}", "background": null, "padding": "{sm}", "font": "body" } },
+        { "id": "f2", "type": "text", "text": "Flex and grid", "style": { "align": "left", "color": "{muted}", "background": null, "padding": "{sm}", "font": "body" } },
+        {
+          "id": "actions",
+          "type": "container",
+          "layout": { "mode": "flex", "direction": "row", "wrap": true, "columns": 2, "gap": 8, "align": "center", "justify": "between" },
+          "style": { "align": "left", "color": "{text}", "background": null, "padding": 0 },
+          "children": [
+            { "id": "more", "type": "button", "label": "Learn more", "href": "/docs", "style": { "align": "left", "color": "{text}", "background": null, "padding": 0 } }
+          ]
+        }
+      ]
     }
   ]
 }

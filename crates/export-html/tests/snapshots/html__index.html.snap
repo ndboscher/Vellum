@@ -30,6 +30,15 @@ Then ship it.</p>
         <path d="M100 80 C100 80 130 60 160 80" fill="none" stroke="#6d4aff" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"></path>
       </svg>
     </div>
+    <div class="blk-container grid">
+      <p class="blk-text text-2">Design tokens</p>
+      <p class="blk-text text-3">Flex and grid</p>
+      <div class="blk-container row">
+        <div class="button-2">
+          <a class="blk-button" href="/docs">Learn more</a>
+        </div>
+      </div>
+    </div>
   </main>
 </body>
 </html>
