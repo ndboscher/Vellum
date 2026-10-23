@@ -1,0 +1,25 @@
+---
+source: crates/export-html/tests/html.rs
+expression: pricing
+---
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pricing &amp; Plans · Alpaca &amp; Co</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="page">
+    <nav class="blk-nav nav-2">
+      <a class="blk-nav-link" href="index.html">Home</a>
+      <a class="blk-nav-link" href="pricing.html" aria-current="page">Pricing &amp; Plans</a>
+    </nav>
+    <h1 class="blk-heading heading-2">Pricing</h1>
+    <div class="button-3">
+      <a class="blk-button" href="index.html">Back home</a>
+    </div>
+  </main>
+</body>
+</html>

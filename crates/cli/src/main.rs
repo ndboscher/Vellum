@@ -34,7 +34,7 @@ enum Cmd {
         #[arg(long, default_value = "0.0.0.0:8080")]
         addr: SocketAddr,
     },
-    /// Export the project's page as code.
+    /// Export the project's site as code.
     Export {
         #[arg(long, default_value = "project")]
         dir: PathBuf,

@@ -2,7 +2,7 @@
 
 use vellum_schema::{
     css, parse_token_ref, token_ref, ColorToken, Document, Drawing, FontToken, Layout, Length,
-    Node, NodeId, NodeKind, SpaceToken, Style, TokenKind,
+    Node, NodeId, NodeKind, Page, SpaceToken, TokenKind,
 };
 
 /// The kinds of block the page palette offers. Containers come in three starting layouts.
@@ -16,6 +16,7 @@ pub const PALETTE: &[(&str, &str)] = &[
     ("image", "Image"),
     ("spacer", "Spacer"),
     ("svg", "Vector graphic"),
+    ("nav", "Navigation"),
 ];
 
 /// Inline placeholder so a fresh image block renders without network access.
@@ -23,7 +24,7 @@ pub const PLACEHOLDER_IMAGE: &str = "data:image/svg+xml,%3Csvg%20xmlns%3D%22http
 
 /// A new block of the given palette type with starter content, or `None` for an unknown type.
 pub fn new_node(type_name: &str, id: String) -> Option<Node> {
-    let mut style = Style::default();
+    let mut font = None;
     let kind = match type_name {
         "stack" | "row" | "grid" => {
             let layout = match type_name {
@@ -41,7 +42,7 @@ pub fn new_node(type_name: &str, id: String) -> Option<Node> {
             level: 1,
         },
         "text" => {
-            style.font = Some("body".into());
+            font = Some("body".into());
             NodeKind::Text {
                 text: "Write something people will want to read.".into(),
             }
@@ -58,9 +59,12 @@ pub fn new_node(type_name: &str, id: String) -> Option<Node> {
         "svg" => NodeKind::Svg {
             drawing: Drawing::default(),
         },
+        "nav" => NodeKind::Nav {},
         _ => return None,
     };
-    Some(Node { id, style, kind })
+    let mut node = Node::new(id, kind);
+    node.style.font = font;
+    Some(node)
 }
 
 /// The document a new project starts with.
@@ -86,11 +90,96 @@ pub fn starter_document(mut next_id: impl FnMut() -> String) -> Document {
         label: "See examples".into(),
         href: "#".into(),
     };
+    let mut about_link = new_node("button", next_id()).unwrap();
+    about_link.kind = NodeKind::Button {
+        label: "About us".into(),
+        href: "/about".into(),
+    };
     if let Some(children) = row.children_mut() {
-        children.extend([new_node("button", next_id()).unwrap(), secondary]);
+        children.extend([about_link, secondary]);
     }
-    doc.nodes = vec![heading, text, row];
+    let home = &mut doc.pages[0];
+    home.nodes = vec![new_node("nav", next_id()).unwrap(), heading, text, row];
+
+    let about = add_page(&mut doc, next_id());
+    let mut about_heading = new_node("heading", next_id()).unwrap();
+    about_heading.kind = NodeKind::Heading {
+        text: "About".into(),
+        level: 1,
+    };
+    let mut about_text = new_node("text", next_id()).unwrap();
+    about_text.kind = NodeKind::Text {
+        text: "Every page shares the site's styles. Add pages under Pages, and link to them with paths like /about.".into(),
+    };
+    let page = doc.page_mut(&about).expect("just added");
+    page.name = "About".into();
+    page.path = "/about".into();
+    page.nodes = vec![
+        new_node("nav", next_id()).unwrap(),
+        about_heading,
+        about_text,
+    ];
     doc
+}
+
+/// Adds a blank page after the others, with a fresh name and path. Returns its id.
+pub fn add_page(doc: &mut Document, id: String) -> NodeId {
+    let n = (doc.pages.len() + 1..)
+        .find(|n| {
+            let path = format!("/page-{n}");
+            !doc.pages.iter().any(|p| p.path == path)
+        })
+        .expect("unbounded");
+    doc.pages.push(Page {
+        id: id.clone(),
+        name: format!("Page {n}"),
+        path: format!("/page-{n}"),
+        nodes: Vec::new(),
+    });
+    id
+}
+
+/// Turns user input like `About Us` or `/about-us/` into a page path like `/about-us`.
+pub fn normalize_path(input: &str) -> String {
+    format!("/{}", css::slug(input))
+}
+
+/// Sets a page's path from user input. The home page stays at `/`, and other pages need a
+/// non-empty path no other page has. Returns whether it changed.
+pub fn set_page_path(doc: &mut Document, page: &str, input: &str) -> bool {
+    let path = normalize_path(input);
+    let taken = doc.pages.iter().any(|p| p.path == path && p.id != page);
+    match doc.page_mut(page) {
+        // `/index` would export to the same file as the home page.
+        Some(p) if !p.is_home() && path != "/" && path != "/index" && !taken && p.path != path => {
+            p.path = path;
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Removes a page. The home page can't be removed.
+pub fn remove_page(doc: &mut Document, page: &str) -> Option<Page> {
+    let i = doc
+        .pages
+        .iter()
+        .position(|p| p.id == page && !p.is_home())?;
+    Some(doc.pages.remove(i))
+}
+
+/// Moves a page one step earlier (`-1`) or later (`1`) in navigation. The home page stays first.
+pub fn nudge_page(doc: &mut Document, page: &str, delta: i32) -> bool {
+    let Some(from) = doc.pages.iter().position(|p| p.id == page) else {
+        return false;
+    };
+    let to = from as i64 + delta.signum() as i64;
+    let in_range = to >= 0 && (to as usize) < doc.pages.len();
+    if !in_range || doc.pages[from].is_home() || doc.pages[to as usize].is_home() {
+        return false;
+    }
+    doc.pages.swap(from, to as usize);
+    true
 }
 
 /// The node with this id anywhere in the tree.
@@ -116,24 +205,29 @@ pub fn find_mut<'a>(nodes: &'a mut [Node], id: &str) -> Option<&'a mut Node> {
     None
 }
 
-/// The child list of `parent`, or the page's top level for `None`. `None` if `parent` is
-/// missing or not a container.
-pub fn children<'a>(doc: &'a Document, parent: Option<&str>) -> Option<&'a Vec<Node>> {
+// The tree operations below take a page's top-level `nodes`, so they work on any page.
+
+/// The child list of `parent`, or the top level for `None`. `None` if `parent` is missing or
+/// not a container.
+pub fn children<'a>(nodes: &'a [Node], parent: Option<&str>) -> Option<&'a [Node]> {
     match parent {
-        None => Some(&doc.nodes),
-        Some(id) => find(&doc.nodes, id)?.children(),
+        None => Some(nodes),
+        Some(id) => find(nodes, id)?.children().map(Vec::as_slice),
     }
 }
 
-pub fn children_mut<'a>(doc: &'a mut Document, parent: Option<&str>) -> Option<&'a mut Vec<Node>> {
+pub fn children_mut<'a>(
+    nodes: &'a mut Vec<Node>,
+    parent: Option<&str>,
+) -> Option<&'a mut Vec<Node>> {
     match parent {
-        None => Some(&mut doc.nodes),
-        Some(id) => find_mut(&mut doc.nodes, id)?.children_mut(),
+        None => Some(nodes),
+        Some(id) => find_mut(nodes, id)?.children_mut(),
     }
 }
 
 /// Where a node sits: its parent container (`None` for the top level) and its index there.
-pub fn locate(doc: &Document, id: &str) -> Option<(Option<NodeId>, usize)> {
+pub fn locate(nodes: &[Node], id: &str) -> Option<(Option<NodeId>, usize)> {
     fn search(nodes: &[Node], parent: Option<&str>, id: &str) -> Option<(Option<NodeId>, usize)> {
         nodes.iter().enumerate().find_map(|(i, n)| {
             if n.id == id {
@@ -143,7 +237,7 @@ pub fn locate(doc: &Document, id: &str) -> Option<(Option<NodeId>, usize)> {
             }
         })
     }
-    search(&doc.nodes, None, id)
+    search(nodes, None, id)
 }
 
 /// Whether `id` is `node` itself or one of its descendants.
@@ -152,8 +246,8 @@ pub fn contains(node: &Node, id: &str) -> bool {
 }
 
 /// Inserts `node` into `parent` at `at` (clamped to the end). Returns whether the parent exists.
-pub fn insert(doc: &mut Document, parent: Option<&str>, at: usize, node: Node) -> bool {
-    let Some(list) = children_mut(doc, parent) else {
+pub fn insert(nodes: &mut Vec<Node>, parent: Option<&str>, at: usize, node: Node) -> bool {
+    let Some(list) = children_mut(nodes, parent) else {
         return false;
     };
     list.insert(at.min(list.len()), node);
@@ -163,33 +257,33 @@ pub fn insert(doc: &mut Document, parent: Option<&str>, at: usize, node: Node) -
 /// Moves a node so it lands at insertion index `at` of `parent` (an index into that list
 /// before the node is taken out, as a drop indicator reports it). Refuses to move a container
 /// into itself. Returns whether anything changed.
-pub fn move_node(doc: &mut Document, id: &str, parent: Option<&str>, at: usize) -> bool {
-    let Some((from_parent, from)) = locate(doc, id) else {
+pub fn move_node(nodes: &mut Vec<Node>, id: &str, parent: Option<&str>, at: usize) -> bool {
+    let Some((from_parent, from)) = locate(nodes, id) else {
         return false;
     };
     if let Some(p) = parent {
-        let node = find(&doc.nodes, id).expect("located above");
+        let node = find(nodes, id).expect("located above");
         if contains(node, p) {
             return false;
         }
     }
-    let Some(target_len) = children(doc, parent).map(Vec::len) else {
+    let Some(target_len) = children(nodes, parent).map(<[Node]>::len) else {
         return false;
     };
     let same_list = from_parent.as_deref() == parent;
     if at > target_len || (same_list && (at == from || at == from + 1)) {
         return false;
     }
-    let node = children_mut(doc, from_parent.as_deref())
+    let node = children_mut(nodes, from_parent.as_deref())
         .expect("located above")
         .remove(from);
     let at = if same_list && at > from { at - 1 } else { at };
-    insert(doc, parent, at, node)
+    insert(nodes, parent, at, node)
 }
 
 /// Moves a node one step up (`-1`) or down (`1`) among its siblings.
-pub fn nudge(doc: &mut Document, id: &str, delta: i32) -> bool {
-    let Some((parent, from)) = locate(doc, id) else {
+pub fn nudge(nodes: &mut Vec<Node>, id: &str, delta: i32) -> bool {
+    let Some((parent, from)) = locate(nodes, id) else {
         return false;
     };
     let to = if delta < 0 {
@@ -198,14 +292,14 @@ pub fn nudge(doc: &mut Document, id: &str, delta: i32) -> bool {
         Some(from + 2)
     };
     match to {
-        Some(to) => move_node(doc, id, parent.as_deref(), to),
+        Some(to) => move_node(nodes, id, parent.as_deref(), to),
         None => false,
     }
 }
 
 /// Replaces the node with the same id. Returns whether it was found.
-pub fn replace(doc: &mut Document, node: Node) -> bool {
-    match find_mut(&mut doc.nodes, &node.id) {
+pub fn replace(nodes: &mut [Node], node: Node) -> bool {
+    match find_mut(nodes, &node.id) {
         Some(slot) => {
             *slot = node;
             true
@@ -214,9 +308,9 @@ pub fn replace(doc: &mut Document, node: Node) -> bool {
     }
 }
 
-pub fn remove(doc: &mut Document, id: &str) -> Option<Node> {
-    let (parent, i) = locate(doc, id)?;
-    Some(children_mut(doc, parent.as_deref())?.remove(i))
+pub fn remove(nodes: &mut Vec<Node>, id: &str) -> Option<Node> {
+    let (parent, i) = locate(nodes, id)?;
+    Some(children_mut(nodes, parent.as_deref())?.remove(i))
 }
 
 /// Calls `f` on every node, parents before children.
@@ -347,7 +441,20 @@ fn rewrite_references(doc: &mut Document, kind: TokenKind, name: &str, to: Refer
             };
         }
     };
-    for_each_mut(&mut doc.nodes, &mut |n| match kind {
+    let font = |value: &mut Option<String>| {
+        if value.as_deref() == Some(name) {
+            *value = match to.clone() {
+                Reference::Token(new) => Some(new),
+                _ => None,
+            };
+        }
+    };
+    let optional_length = |value: &mut Option<Length>| {
+        if let Some(l) = value {
+            length(l);
+        }
+    };
+    let mut visit = |n: &mut Node| match kind {
         TokenKind::Color => {
             color(&mut n.style.color);
             if let Some(bg) = &mut n.style.background {
@@ -355,11 +462,9 @@ fn rewrite_references(doc: &mut Document, kind: TokenKind, name: &str, to: Refer
             }
         }
         TokenKind::Font => {
-            if n.style.font.as_deref() == Some(name) {
-                n.style.font = match to.clone() {
-                    Reference::Token(new) => Some(new),
-                    _ => None,
-                };
+            font(&mut n.style.font);
+            for o in n.responsive.values_mut() {
+                font(&mut o.font);
             }
         }
         TokenKind::Space => {
@@ -367,8 +472,15 @@ fn rewrite_references(doc: &mut Document, kind: TokenKind, name: &str, to: Refer
             if let NodeKind::Container { layout, .. } = &mut n.kind {
                 length(&mut layout.gap);
             }
+            for o in n.responsive.values_mut() {
+                optional_length(&mut o.padding);
+                optional_length(&mut o.gap);
+            }
         }
-    });
+    };
+    for page in &mut doc.pages {
+        for_each_mut(&mut page.nodes, &mut visit);
+    }
 }
 
 /// Snapshot-based undo/redo. Documents are small, so whole copies keep this simple and exact.
@@ -418,14 +530,17 @@ impl History {
 mod tests {
     use super::*;
 
-    fn doc(ids: &[&str]) -> Document {
-        Document {
-            nodes: ids
-                .iter()
-                .map(|id| new_node("text", id.to_string()).unwrap())
-                .collect(),
-            ..Document::default()
-        }
+    fn doc(ids: &[&str]) -> Vec<Node> {
+        ids.iter()
+            .map(|id| new_node("text", id.to_string()).unwrap())
+            .collect()
+    }
+
+    /// A one-page site whose home page is `nodes`.
+    fn site(nodes: Vec<Node>) -> Document {
+        let mut d = Document::default();
+        d.pages[0].nodes = nodes;
+        d
     }
 
     fn ids(nodes: &[Node]) -> Vec<&str> {
@@ -433,7 +548,7 @@ mod tests {
     }
 
     /// `a`, then row `r` holding `x` and `y`, then `b`.
-    fn nested() -> Document {
+    fn nested() -> Vec<Node> {
         let mut d = doc(&["a", "b"]);
         let mut row = new_node("row", "r".into()).unwrap();
         row.children_mut().unwrap().extend([
@@ -444,7 +559,7 @@ mod tests {
         d
     }
 
-    fn row(d: &Document) -> Vec<&str> {
+    fn row(d: &[Node]) -> Vec<&str> {
         ids(children(d, Some("r")).unwrap())
     }
 
@@ -452,14 +567,14 @@ mod tests {
     fn move_down_to_insertion_index() {
         let mut d = doc(&["a", "b", "c"]);
         assert!(move_node(&mut d, "a", None, 3));
-        assert_eq!(ids(&d.nodes), ["b", "c", "a"]);
+        assert_eq!(ids(&d), ["b", "c", "a"]);
     }
 
     #[test]
     fn move_up() {
         let mut d = doc(&["a", "b", "c"]);
         assert!(move_node(&mut d, "c", None, 0));
-        assert_eq!(ids(&d.nodes), ["c", "a", "b"]);
+        assert_eq!(ids(&d), ["c", "a", "b"]);
     }
 
     #[test]
@@ -467,7 +582,7 @@ mod tests {
         let mut d = doc(&["a", "b"]);
         assert!(!move_node(&mut d, "a", None, 1));
         assert!(!move_node(&mut d, "a", None, 0));
-        assert_eq!(ids(&d.nodes), ["a", "b"]);
+        assert_eq!(ids(&d), ["a", "b"]);
     }
 
     #[test]
@@ -475,9 +590,9 @@ mod tests {
         let mut d = doc(&["a", "b", "c"]);
         assert!(!nudge(&mut d, "a", -1));
         assert!(nudge(&mut d, "a", 1));
-        assert_eq!(ids(&d.nodes), ["b", "a", "c"]);
+        assert_eq!(ids(&d), ["b", "a", "c"]);
         assert!(nudge(&mut d, "c", -1));
-        assert_eq!(ids(&d.nodes), ["b", "c", "a"]);
+        assert_eq!(ids(&d), ["b", "c", "a"]);
         assert!(!nudge(&mut d, "a", 1));
     }
 
@@ -490,16 +605,16 @@ mod tests {
             99,
             new_node("spacer", "s".into()).unwrap()
         ));
-        assert_eq!(ids(&d.nodes), ["a", "s"]);
+        assert_eq!(ids(&d), ["a", "s"]);
         assert_eq!(remove(&mut d, "a").map(|n| n.id), Some("a".into()));
-        assert_eq!(ids(&d.nodes), ["s"]);
+        assert_eq!(ids(&d), ["s"]);
     }
 
     #[test]
     fn finds_and_removes_nested_nodes() {
         let mut d = nested();
         assert_eq!(locate(&d, "y"), Some((Some("r".into()), 1)));
-        assert_eq!(find(&d.nodes, "x").map(|n| n.id.as_str()), Some("x"));
+        assert_eq!(find(&d, "x").map(|n| n.id.as_str()), Some("x"));
         assert!(remove(&mut d, "x").is_some());
         assert_eq!(row(&d), ["y"]);
         assert!(!insert(
@@ -514,10 +629,10 @@ mod tests {
     fn moves_between_containers() {
         let mut d = nested();
         assert!(move_node(&mut d, "a", Some("r"), 1));
-        assert_eq!(ids(&d.nodes), ["r", "b"]);
+        assert_eq!(ids(&d), ["r", "b"]);
         assert_eq!(row(&d), ["x", "a", "y"]);
         assert!(move_node(&mut d, "y", None, 0));
-        assert_eq!(ids(&d.nodes), ["y", "r", "b"]);
+        assert_eq!(ids(&d), ["y", "r", "b"]);
         assert!(nudge(&mut d, "x", 1));
         assert_eq!(row(&d), ["a", "x"]);
     }
@@ -534,20 +649,25 @@ mod tests {
         assert!(!move_node(&mut d, "r", Some("r"), 0));
         assert!(!move_node(&mut d, "r", Some("g"), 0));
         assert!(move_node(&mut d, "deep", None, 0));
-        assert_eq!(ids(&d.nodes), ["deep", "a", "r", "b"]);
+        assert_eq!(ids(&d), ["deep", "a", "r", "b"]);
     }
 
     #[test]
     fn undo_and_redo_walk_history() {
         let mut h = History::default();
-        let mut d = doc(&["a"]);
+        let mut d = site(doc(&["a"]));
         h.record(d.clone());
-        insert(&mut d, None, 1, new_node("text", "b".into()).unwrap());
+        insert(
+            &mut d.pages[0].nodes,
+            None,
+            1,
+            new_node("text", "b".into()).unwrap(),
+        );
 
         let undone = h.undo(&d).unwrap();
-        assert_eq!(ids(&undone.nodes), ["a"]);
+        assert_eq!(ids(&undone.pages[0].nodes), ["a"]);
         let redone = h.redo(&undone).unwrap();
-        assert_eq!(ids(&redone.nodes), ["a", "b"]);
+        assert_eq!(ids(&redone.pages[0].nodes), ["a", "b"]);
         assert!(h.can_undo());
         assert!(!h.can_redo());
     }
@@ -563,10 +683,13 @@ mod tests {
 
     #[test]
     fn renaming_a_token_updates_references() {
-        let mut d = nested();
-        d.nodes[0].style.background = Some("{muted}".into());
+        let mut d = site(nested());
+        d.pages[0].nodes[0].style.background = Some("{muted}".into());
         assert!(rename_token(&mut d, TokenKind::Color, "muted", "Soft Gray"));
-        assert_eq!(d.nodes[0].style.background.as_deref(), Some("{soft-gray}"));
+        assert_eq!(
+            d.pages[0].nodes[0].style.background.as_deref(),
+            Some("{soft-gray}")
+        );
         assert!(d.tokens.colors.iter().any(|t| t.name == "soft-gray"));
         assert!(!rename_token(
             &mut d,
@@ -576,34 +699,56 @@ mod tests {
         ));
         assert!(!rename_token(&mut d, TokenKind::Color, "accent", "brand"));
 
+        let x = find_mut(&mut d.pages[0].nodes, "x").unwrap();
+        x.responsive.insert(
+            vellum_schema::Breakpoint::Mobile,
+            vellum_schema::Override {
+                padding: Some(Length::Token("md".into())),
+                font: Some("body".into()),
+                ..Default::default()
+            },
+        );
         assert!(rename_token(&mut d, TokenKind::Space, "md", "medium"));
-        let NodeKind::Container { layout, .. } = &find(&d.nodes, "r").unwrap().kind else {
+        let mobile = &find(&d.pages[0].nodes, "x").unwrap().responsive;
+        assert_eq!(
+            mobile[&vellum_schema::Breakpoint::Mobile].padding,
+            Some(Length::Token("medium".into()))
+        );
+        let NodeKind::Container { layout, .. } = &find(&d.pages[0].nodes, "r").unwrap().kind else {
             panic!("r is a row");
         };
         assert_eq!(layout.gap, Length::Token("medium".into()));
         assert_eq!(
-            find(&d.nodes, "x").unwrap().style.padding,
+            find(&d.pages[0].nodes, "x").unwrap().style.padding,
             Length::Token("medium".into())
         );
 
         assert!(rename_token(&mut d, TokenKind::Font, "body", "copy"));
+        let mobile = &find(&d.pages[0].nodes, "x").unwrap().responsive;
         assert_eq!(
-            find(&d.nodes, "y").unwrap().style.font.as_deref(),
+            mobile[&vellum_schema::Breakpoint::Mobile].font.as_deref(),
+            Some("copy")
+        );
+        assert_eq!(
+            find(&d.pages[0].nodes, "y").unwrap().style.font.as_deref(),
             Some("copy")
         );
     }
 
     #[test]
     fn removing_a_token_keeps_the_look() {
-        let mut d = nested();
+        let mut d = site(nested());
         assert!(!remove_token(&mut d, TokenKind::Color, "text"));
-        d.nodes[0].style.color = "{muted}".into();
+        d.pages[0].nodes[0].style.color = "{muted}".into();
         assert!(remove_token(&mut d, TokenKind::Color, "muted"));
-        assert_eq!(d.nodes[0].style.color, "#6b6780");
+        assert_eq!(d.pages[0].nodes[0].style.color, "#6b6780");
         assert!(remove_token(&mut d, TokenKind::Space, "md"));
-        assert_eq!(find(&d.nodes, "x").unwrap().style.padding, Length::Px(16.0));
+        assert_eq!(
+            find(&d.pages[0].nodes, "x").unwrap().style.padding,
+            Length::Px(16.0)
+        );
         assert!(remove_token(&mut d, TokenKind::Font, "body"));
-        assert_eq!(find(&d.nodes, "x").unwrap().style.font, None);
+        assert_eq!(find(&d.pages[0].nodes, "x").unwrap().style.font, None);
         assert!(!remove_token(&mut d, TokenKind::Font, "body"));
     }
 
@@ -613,5 +758,65 @@ mod tests {
         assert_eq!(add_token(&mut d, TokenKind::Color), "color-1");
         assert_eq!(add_token(&mut d, TokenKind::Color), "color-2");
         assert_eq!(add_token(&mut d, TokenKind::Space), "space-1");
+    }
+
+    #[test]
+    fn token_references_update_on_every_page() {
+        let mut d = site(doc(&["a"]));
+        let about = add_page(&mut d, "p2".into());
+        d.page_mut(&about).unwrap().nodes = doc(&["b"]);
+        d.pages[1].nodes[0].style.color = "{muted}".into();
+        assert!(rename_token(&mut d, TokenKind::Color, "muted", "quiet"));
+        assert_eq!(d.pages[1].nodes[0].style.color, "{quiet}");
+    }
+
+    #[test]
+    fn pages_get_unique_paths_and_the_home_page_stays_put() {
+        let mut d = Document::default();
+        let a = add_page(&mut d, "a".into());
+        let b = add_page(&mut d, "b".into());
+        assert_eq!(d.page(&a).unwrap().path, "/page-2");
+        assert_eq!(d.page(&b).unwrap().path, "/page-3");
+
+        assert!(set_page_path(&mut d, &a, "About Us/"));
+        assert_eq!(d.page(&a).unwrap().path, "/about-us");
+        assert!(!set_page_path(&mut d, &b, "/about-us"), "taken");
+        assert!(!set_page_path(&mut d, &b, "///"), "empty");
+        assert!(
+            !set_page_path(&mut d, &b, "index"),
+            "clashes with index.html"
+        );
+        assert!(!set_page_path(&mut d, "home", "/start"), "home stays at /");
+
+        assert!(!nudge_page(&mut d, &a, -1), "home stays first");
+        assert!(nudge_page(&mut d, &a, 1));
+        assert_eq!(d.pages[2].id, a);
+
+        assert!(remove_page(&mut d, "home").is_none());
+        assert!(remove_page(&mut d, &b).is_some());
+        assert_eq!(d.pages.len(), 2);
+        // A removed path is free again.
+        assert_eq!(add_page(&mut d, "c".into()), "c");
+        assert_eq!(d.page("c").unwrap().path, "/page-3");
+    }
+
+    #[test]
+    fn starter_site_links_its_pages() {
+        let mut n = 0;
+        let d = starter_document(|| {
+            n += 1;
+            n.to_string()
+        });
+        assert_eq!(d.pages.len(), 2);
+        let links: Vec<_> = d.pages[0]
+            .nodes
+            .iter()
+            .flat_map(|n| n.children().into_iter().flatten())
+            .filter_map(|n| match &n.kind {
+                NodeKind::Button { href, .. } => Some(href.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(links.iter().any(|href| d.page_for_link(href).is_some()));
     }
 }

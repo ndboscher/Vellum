@@ -1,4 +1,4 @@
-//! Lowers a [`Document`] into a target-neutral element tree plus CSS rules.
+//! Lowers a [`Document`] into a target-neutral element tree per page plus one set of CSS rules.
 //!
 //! Every exporter that emits markup (HTML, JSX, Vue templates, ...) prints this
 //! tree instead of walking the document itself, so node semantics, class naming,
@@ -13,7 +13,9 @@
 
 use std::collections::HashSet;
 
-use vellum_schema::{css, Document, Drawing, Geometry, Node, NodeKind, Shape, Style};
+use vellum_schema::{
+    css, Breakpoint, Document, Drawing, Geometry, Node, NodeKind, Page, Shape, Style,
+};
 use vellum_vector::path_data;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -39,13 +41,27 @@ pub struct CssRule {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct LoweredPage {
-    /// The page root: a `<main class="page">` holding every block.
-    pub root: Element,
-    /// Design tokens as custom properties, base rules shared by every export, then one rule
-    /// per node.
+pub struct LoweredSite {
+    /// In the document's page order; the first is the home page.
+    pub pages: Vec<LoweredPage>,
+    /// One stylesheet for every page: design tokens as custom properties, base rules shared by
+    /// every export, one rule per node, then each breakpoint's overrides, widest first.
     pub rules: Vec<CssRule>,
 }
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoweredPage {
+    pub name: String,
+    /// The page's site path, such as `/` or `/about`.
+    pub path: String,
+    /// A file-name-safe stem, `index` for the home page.
+    pub file_stem: String,
+    /// The page root: a `<main class="page">` holding every block.
+    pub root: Element,
+}
+
+/// How a target links to one of the site's pages, such as `about.html` or `/about`.
+pub type PageLinks<'a> = &'a dyn Fn(&Page) -> String;
 
 pub const VOID_ELEMENTS: &[&str] = &["img", "br", "hr", "input", "meta", "link"];
 
@@ -106,9 +122,26 @@ const BASE_RULES: &[(&str, &[(&str, &str)])] = &[
             ("height", "auto"),
         ],
     ),
+    (
+        ".blk-nav",
+        &[("display", "flex"), ("flex-wrap", "wrap"), ("gap", "20px")],
+    ),
+    (
+        ".blk-nav-link",
+        &[
+            ("color", "inherit"),
+            ("text-decoration", "none"),
+            ("font-weight", "600"),
+        ],
+    ),
+    (
+        ".blk-nav-link[aria-current=\"page\"]",
+        &[("color", "var(--color-accent, #6d4aff)")],
+    ),
 ];
 
-pub fn lower_document(doc: &Document) -> LoweredPage {
+/// Lowers every page, rewriting links to the site's own pages with `links`.
+pub fn lower_site(doc: &Document, links: PageLinks) -> LoweredSite {
     let variables = |vars: Vec<(String, String)>| -> Vec<(String, String)> {
         vars.into_iter()
             .filter_map(|(p, v)| declaration(&p, v))
@@ -138,26 +171,75 @@ pub fn lower_document(doc: &Document) -> LoweredPage {
                 .collect(),
         }
     }));
-    let mut namer = ClassNamer::default();
-    let children = doc
-        .nodes
-        .iter()
-        .map(|node| OutputNode::Element(lower_node(node, &mut namer, &mut rules)))
-        .collect();
-    LoweredPage {
-        root: element("main", vec![("class", "page".into())], children),
+    let mut cx = Lowering {
+        doc,
+        links,
+        page: &doc.pages[0],
+        namer: ClassNamer::default(),
         rules,
+        responsive: Breakpoint::ALL.iter().map(|_| Vec::new()).collect(),
+    };
+    let pages = doc
+        .pages
+        .iter()
+        .map(|page| {
+            cx.page = page;
+            let children = page
+                .nodes
+                .iter()
+                .map(|node| OutputNode::Element(lower_node(node, &mut cx)))
+                .collect();
+            LoweredPage {
+                name: page.name.clone(),
+                path: page.path.clone(),
+                file_stem: page.file_stem(),
+                root: element("main", vec![("class", "page".into())], children),
+            }
+        })
+        .collect();
+    let Lowering {
+        mut rules,
+        responsive,
+        ..
+    } = cx;
+    rules.extend(responsive.into_iter().flatten());
+    LoweredSite { pages, rules }
+}
+
+struct Lowering<'a> {
+    doc: &'a Document,
+    links: PageLinks<'a>,
+    /// The page being lowered, for marking its nav link current.
+    page: &'a Page,
+    /// Class names are unique across the site, so every page can share one stylesheet.
+    namer: ClassNamer,
+    rules: Vec<CssRule>,
+    /// Override rules for each of [`Breakpoint::ALL`], appended after the base rules.
+    responsive: Vec<Vec<CssRule>>,
+}
+
+impl Lowering<'_> {
+    /// A link's target, pointing site paths like `/about#team` at the target's page file.
+    fn href(&self, href: &str) -> String {
+        let href = href.trim();
+        match self.doc.page_for_link(href) {
+            Some(page) => {
+                let suffix = href.find(['#', '?']).map_or("", |i| &href[i..]);
+                format!("{}{suffix}", (self.links)(page))
+            }
+            None => safe_url(href, UrlUse::Link),
+        }
     }
 }
 
-fn lower_node(node: &Node, namer: &mut ClassNamer, rules: &mut Vec<CssRule>) -> Element {
+fn lower_node(node: &Node, cx: &mut Lowering) -> Element {
     let label = match &node.kind {
         // `.svg` would read like an element selector in the stylesheet.
         NodeKind::Svg { .. } => "vector",
         NodeKind::Container { layout, .. } => layout.label(),
         _ => node.kind.type_name(),
     };
-    let class_name = namer.name(label);
+    let class_name = cx.namer.name(label);
     let declarations = match &node.kind {
         NodeKind::Spacer { height } => vec![
             declaration("height", format!("{}px", fmt(*height))),
@@ -181,11 +263,28 @@ fn lower_node(node: &Node, namer: &mut ClassNamer, rules: &mut Vec<CssRule>) -> 
         }
         _ => block_declarations(&node.style),
     };
-    rules.push(CssRule {
+    cx.rules.push(CssRule {
         media: None,
         selector: format!(".{class_name}"),
         declarations: declarations.into_iter().flatten().collect(),
     });
+    for (bp, rules) in Breakpoint::ALL.iter().zip(&mut cx.responsive) {
+        let Some(o) = node.responsive.get(bp) else {
+            continue;
+        };
+        let declarations: Vec<_> = o
+            .declarations(node)
+            .into_iter()
+            .filter_map(|(p, v)| declaration(p, v))
+            .collect();
+        if !declarations.is_empty() {
+            rules.push(CssRule {
+                media: Some(bp.media()),
+                selector: format!(".{class_name}"),
+                declarations,
+            });
+        }
+    }
 
     // `block` is the element carrying the per-node class; some blocks wrap an inner element.
     let block = |tag, base: &str, attrs: Vec<(&'static str, String)>, children| {
@@ -223,10 +322,7 @@ fn lower_node(node: &Node, namer: &mut ClassNamer, rules: &mut Vec<CssRule>) -> 
         ),
         NodeKind::Button { label, href } => wrap(element(
             "a",
-            vec![
-                ("class", "blk-button".into()),
-                ("href", safe_url(href, UrlUse::Link)),
-            ],
+            vec![("class", "blk-button".into()), ("href", cx.href(href))],
             vec![OutputNode::Text(label.clone())],
         )),
         NodeKind::Image { src, alt } => wrap(element(
@@ -248,9 +344,29 @@ fn lower_node(node: &Node, namer: &mut ClassNamer, rules: &mut Vec<CssRule>) -> 
         NodeKind::Container { children, .. } => {
             let children = children
                 .iter()
-                .map(|child| OutputNode::Element(lower_node(child, namer, rules)))
+                .map(|child| OutputNode::Element(lower_node(child, cx)))
                 .collect();
             block("div", "blk-container", vec![], children)
+        }
+        NodeKind::Nav {} => {
+            let links = cx
+                .doc
+                .pages
+                .iter()
+                .map(|page| {
+                    let mut attrs =
+                        vec![("class", "blk-nav-link".into()), ("href", (cx.links)(page))];
+                    if page.id == cx.page.id {
+                        attrs.push(("aria-current", "page".into()));
+                    }
+                    OutputNode::Element(element(
+                        "a",
+                        attrs,
+                        vec![OutputNode::Text(page.name.clone())],
+                    ))
+                })
+                .collect();
+            block("nav", "blk-nav", vec![], links)
         }
     }
 }
@@ -431,23 +547,34 @@ impl ClassNamer {
     }
 }
 
-/// Serializes CSS rules with two-space indentation.
+/// Serializes CSS rules with two-space indentation. Neighboring rules under the same at-rule
+/// share one block.
 pub fn print_css(rules: &[CssRule]) -> String {
+    let print_rule = |rule: &CssRule| {
+        let body: String = rule
+            .declarations
+            .iter()
+            .map(|(p, v)| format!("  {p}: {v};\n"))
+            .collect();
+        format!("{} {{\n{body}}}\n", rule.selector)
+    };
     rules
-        .iter()
-        .map(|rule| {
-            let body: String = rule
-                .declarations
-                .iter()
-                .map(|(p, v)| format!("  {p}: {v};\n"))
-                .collect();
-            let rule_text = format!("{} {{\n{body}}}\n", rule.selector);
-            match &rule.media {
-                None => rule_text,
-                Some(media) => {
-                    let inner: String = rule_text.lines().map(|l| format!("  {l}\n")).collect();
-                    format!("{media} {{\n{inner}}}\n")
-                }
+        .chunk_by(|a, b| a.media.is_some() && a.media == b.media)
+        .map(|group| match &group[0].media {
+            None => group.iter().map(print_rule).collect::<Vec<_>>().join("\n"),
+            Some(media) => {
+                let inner: String = group
+                    .iter()
+                    .map(print_rule)
+                    .collect::<Vec<_>>()
+                    .join("\n")
+                    .lines()
+                    .map(|l| match l {
+                        "" => "\n".to_owned(),
+                        l => format!("  {l}\n"),
+                    })
+                    .collect();
+                format!("{media} {{\n{inner}}}\n")
             }
         })
         .collect::<Vec<_>>()
@@ -457,6 +584,100 @@ pub fn print_css(rules: &[CssRule]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vellum_schema::Override;
+
+    fn html_links(page: &Page) -> String {
+        format!("{}.html", page.file_stem())
+    }
+
+    fn two_pages() -> Document {
+        let mut doc = Document::default();
+        doc.pages.push(Page {
+            id: "about".into(),
+            name: "About".into(),
+            path: "/about".into(),
+            nodes: vec![],
+        });
+        for page in &mut doc.pages {
+            page.nodes = vec![
+                Node::new("nav", NodeKind::Nav {}),
+                Node::new(
+                    "b",
+                    NodeKind::Button {
+                        label: "Go".into(),
+                        href: "/about/#team".into(),
+                    },
+                ),
+            ];
+        }
+        doc
+    }
+
+    fn attr<'a>(el: &'a Element, name: &str) -> Option<&'a str> {
+        el.attrs
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, v)| v.as_str())
+    }
+
+    fn child(el: &Element, i: usize) -> &Element {
+        match &el.children[i] {
+            OutputNode::Element(e) => e,
+            OutputNode::Text(_) => panic!("expected an element"),
+        }
+    }
+
+    #[test]
+    fn links_pages_and_marks_the_current_one() {
+        let site = lower_site(&two_pages(), &html_links);
+        assert_eq!(site.pages.len(), 2);
+        assert_eq!(site.pages[1].file_stem, "about");
+        let about_nav = child(&site.pages[1].root, 0);
+        assert_eq!(about_nav.tag, "nav");
+        let links: Vec<_> = (0..2).map(|i| child(about_nav, i)).collect();
+        assert_eq!(attr(links[0], "href"), Some("index.html"));
+        assert_eq!(attr(links[0], "aria-current"), None);
+        assert_eq!(attr(links[1], "aria-current"), Some("page"));
+        let button = child(child(&site.pages[0].root, 1), 0);
+        assert_eq!(attr(button, "href"), Some("about.html#team"));
+    }
+
+    #[test]
+    fn class_names_stay_unique_across_pages() {
+        let site = lower_site(&two_pages(), &html_links);
+        let class = |p: usize| attr(child(&site.pages[p].root, 0), "class").map(str::to_owned);
+        assert_eq!(class(0).as_deref(), Some("blk-nav nav"));
+        assert_eq!(class(1).as_deref(), Some("blk-nav nav-2"));
+    }
+
+    #[test]
+    fn overrides_become_media_rules_after_the_base_rules() {
+        let mut doc = two_pages();
+        let nav = &mut doc.pages[0].nodes[0];
+        nav.responsive.insert(
+            Breakpoint::Mobile,
+            Override {
+                hidden: true,
+                ..Override::default()
+            },
+        );
+        nav.responsive.insert(
+            Breakpoint::Tablet,
+            Override {
+                align: Some(vellum_schema::Align::Center),
+                ..Override::default()
+            },
+        );
+        let css = print_css(&lower_site(&doc, &html_links).rules);
+        let tablet = css
+            .find("@media (max-width: 900px) {\n  .nav {\n    text-align: center;")
+            .expect("tablet rule");
+        let mobile = css
+            .find("@media (max-width: 600px) {\n  .nav {\n    display: none;")
+            .expect("mobile rule");
+        let last_base = css.rfind(".button-2 {").expect("base rule");
+        assert!(last_base < tablet && tablet < mobile);
+    }
 
     #[test]
     fn neutralizes_script_urls() {
@@ -501,8 +722,8 @@ mod tests {
         let mut doc = Document::default();
         doc.tokens.colors[0].light = "red; } body { display: none".into();
         doc.tokens.fonts[0].family = "x</style><script>".into();
-        let page = lower_document(&doc);
-        let css = print_css(&page.rules);
+        let site = lower_site(&doc, &html_links);
+        let css = print_css(&site.rules);
         assert!(!css.contains("display: none"));
         assert!(!css.contains("<script>"));
         assert!(css.contains("--color-muted: #6b6780;"));
@@ -512,27 +733,25 @@ mod tests {
     fn nests_containers_and_wraps_dark_overrides_in_a_media_query() {
         let mut doc = Document::default();
         use vellum_schema::Layout;
-        let mut row = Node {
-            id: "r".into(),
-            style: Style::default(),
-            kind: NodeKind::Container {
+        let mut row = Node::new(
+            "r",
+            NodeKind::Container {
                 layout: Layout::row(),
                 children: vec![],
             },
-        };
-        row.children_mut().unwrap().push(Node {
-            id: "t".into(),
-            style: Style::default(),
-            kind: NodeKind::Text { text: "hi".into() },
-        });
-        doc.nodes.push(row);
-        let page = lower_document(&doc);
+        );
+        row.children_mut()
+            .unwrap()
+            .push(Node::new("t", NodeKind::Text { text: "hi".into() }));
+        doc.pages[0].nodes.push(row);
+        let site = lower_site(&doc, &html_links);
+        let page = &site.pages[0];
         let OutputNode::Element(row) = &page.root.children[0] else {
             panic!("row element");
         };
         assert_eq!(row.attrs[0], ("class", "blk-container row".into()));
         assert!(matches!(&row.children[0], OutputNode::Element(e) if e.tag == "p"));
-        let css = print_css(&page.rules);
+        let css = print_css(&site.rules);
         assert!(css.contains(
             "@media (prefers-color-scheme: dark) {\n  :root {\n    --color-text: #f4f3f8;"
         ));

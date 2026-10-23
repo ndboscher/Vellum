@@ -1,10 +1,10 @@
 use serde::Deserialize;
 
-use vellum_export_core::lower::{lower_document, print_css, OutputNode, VOID_ELEMENTS};
+use vellum_export_core::lower::{lower_site, print_css, OutputNode, VOID_ELEMENTS};
 use vellum_export_core::{
     parse_options, ExportError, ExportOptions, ExportResult, Exporter, OutputFile,
 };
-use vellum_schema::Document;
+use vellum_schema::{Document, Page};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
@@ -29,36 +29,50 @@ impl Exporter for HtmlExporter {
     }
 }
 
+/// Writes one HTML file per page, named by its path (`index.html`, `about.html`), sharing one
+/// stylesheet.
 pub fn export_html(doc: &Document, options: &HtmlOptions) -> ExportResult {
-    let page = lower_document(doc);
-    let css = print_css(&page.rules);
+    let file_name = |page: &Page| format!("{}.html", page.file_stem());
+    let site = lower_site(doc, &file_name);
+    let css = print_css(&site.rules);
 
-    let mut head = vec![
-        r#"<meta charset="utf-8">"#.to_owned(),
-        r#"<meta name="viewport" content="width=device-width, initial-scale=1">"#.to_owned(),
-        format!("<title>{}</title>", escape_text(&doc.title)),
-    ];
-    if !options.inline_css {
-        head.push(r#"<link rel="stylesheet" href="styles.css">"#.to_owned());
-    } else if !css.is_empty() {
-        head.push(format!("<style>\n{}\n</style>", indent(css.trim_end(), 1)));
-    }
+    let mut files: Vec<_> = site
+        .pages
+        .into_iter()
+        .map(|page| {
+            let title = if page.path == "/" {
+                doc.title.clone()
+            } else {
+                format!("{} · {}", page.name, doc.title)
+            };
+            let mut head = vec![
+                r#"<meta charset="utf-8">"#.to_owned(),
+                r#"<meta name="viewport" content="width=device-width, initial-scale=1">"#
+                    .to_owned(),
+                format!("<title>{}</title>", escape_text(&title)),
+            ];
+            if !options.inline_css {
+                head.push(r#"<link rel="stylesheet" href="styles.css">"#.to_owned());
+            } else if !css.is_empty() {
+                head.push(format!("<style>\n{}\n</style>", indent(css.trim_end(), 1)));
+            }
 
-    let mut lines = vec![
-        "<!doctype html>".to_owned(),
-        r#"<html lang="en">"#.to_owned(),
-        "<head>".to_owned(),
-        indent(&head.join("\n"), 1),
-        "</head>".to_owned(),
-        "<body>".to_owned(),
-    ];
-    lines.push(print_html(&OutputNode::Element(page.root), 1));
-    lines.extend(["</body>".to_owned(), "</html>".to_owned(), String::new()]);
-
-    let mut files = vec![OutputFile {
-        path: "index.html".into(),
-        contents: lines.join("\n"),
-    }];
+            let mut lines = vec![
+                "<!doctype html>".to_owned(),
+                r#"<html lang="en">"#.to_owned(),
+                "<head>".to_owned(),
+                indent(&head.join("\n"), 1),
+                "</head>".to_owned(),
+                "<body>".to_owned(),
+            ];
+            lines.push(print_html(&OutputNode::Element(page.root), 1));
+            lines.extend(["</body>".to_owned(), "</html>".to_owned(), String::new()]);
+            OutputFile {
+                path: format!("{}.html", page.file_stem),
+                contents: lines.join("\n"),
+            }
+        })
+        .collect();
     if !options.inline_css {
         files.push(OutputFile {
             path: "styles.css".into(),

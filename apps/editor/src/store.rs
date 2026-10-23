@@ -2,7 +2,7 @@
 
 use leptos::prelude::*;
 use vellum_core::History;
-use vellum_schema::{Document, Drawing, NodeId};
+use vellum_schema::{Breakpoint, Document, Drawing, Node, NodeId};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum View {
@@ -30,6 +30,11 @@ pub struct Store {
     pub drawing: RwSignal<Drawing>,
     /// The page block the open drawing belongs to, if it was opened from one.
     pub editing_node: RwSignal<Option<NodeId>>,
+    /// The page open in the page editor. If it disappears (say, on undo) the home page shows.
+    pub page: RwSignal<NodeId>,
+    /// The viewport the canvas previews, `None` for desktop. Responsive controls edit its
+    /// overrides.
+    pub breakpoint: RwSignal<Option<Breakpoint>>,
 }
 
 impl Store {
@@ -46,7 +51,26 @@ impl Store {
             dark_preview: RwSignal::new(false),
             drawing: RwSignal::new(drawing),
             editing_node: RwSignal::new(None),
+            page: RwSignal::new("home".into()),
+            breakpoint: RwSignal::new(None),
         }
+    }
+
+    /// The open page's top level. Untracked: views that list it also track `page`.
+    pub fn nodes<'a>(&self, d: &'a Document) -> &'a Vec<Node> {
+        self.page.with_untracked(|id| &d.page_or_home(id).nodes)
+    }
+
+    pub fn nodes_mut<'a>(&self, d: &'a mut Document) -> &'a mut Vec<Node> {
+        self.page
+            .with_untracked(|id| &mut d.page_or_home_mut(id).nodes)
+    }
+
+    /// Finds a node on any page, so a drawing opened from one page still saves back.
+    pub fn find_mut<'a>(d: &'a mut Document, id: &str) -> Option<&'a mut Node> {
+        d.pages
+            .iter_mut()
+            .find_map(|p| vellum_core::find_mut(&mut p.nodes, id))
     }
 
     /// Applies a discrete change (insert, move, delete) as its own undo step.

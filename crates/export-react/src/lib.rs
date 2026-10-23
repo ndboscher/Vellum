@@ -1,15 +1,15 @@
 use serde::Deserialize;
 
-use vellum_export_core::lower::{lower_document, print_css, OutputNode, VOID_ELEMENTS};
+use vellum_export_core::lower::{lower_site, print_css, OutputNode, VOID_ELEMENTS};
 use vellum_export_core::{
     parse_options, ExportError, ExportOptions, ExportResult, Exporter, OutputFile,
 };
-use vellum_schema::Document;
+use vellum_schema::{Document, Page};
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReactOptions {
-    /// Name of the generated component.
+    /// Name of the root component, which picks a page by URL path.
     pub component_name: String,
     /// Emit `.tsx` instead of `.jsx`.
     pub typescript: bool,
@@ -18,7 +18,7 @@ pub struct ReactOptions {
 impl Default for ReactOptions {
     fn default() -> Self {
         Self {
-            component_name: "Page".into(),
+            component_name: "App".into(),
             typescript: false,
         }
     }
@@ -40,6 +40,9 @@ impl Exporter for ReactExporter {
     }
 }
 
+/// Writes one component per page under `src/pages/`, a root component that renders the page
+/// for the current URL path, and one shared stylesheet. Links between pages stay site paths
+/// like `/about`, so any static host that serves the app for every path works.
 pub fn export_react(doc: &Document, options: &ReactOptions) -> Result<ExportResult, ExportError> {
     let name = &options.component_name;
     let valid_name = name.chars().next().is_some_and(|c| c.is_ascii_uppercase())
@@ -51,32 +54,81 @@ pub fn export_react(doc: &Document, options: &ReactOptions) -> Result<ExportResu
         });
     }
     let ext = if options.typescript { "tsx" } else { "jsx" };
-    let page = lower_document(doc);
-    let css = print_css(&page.rules);
+    let site_path = |page: &Page| page.path.clone();
+    let site = lower_site(doc, &site_path);
+    let css = print_css(&site.rules);
 
-    let root = OutputNode::Element(page.root);
+    let mut used = vec![name.clone()];
+    let components: Vec<String> = site
+        .pages
+        .iter()
+        .map(|page| {
+            let base = component_name(&page.name);
+            let mut candidate = base.clone();
+            let mut n = 2;
+            while used.contains(&candidate) {
+                candidate = format!("{base}{n}");
+                n += 1;
+            }
+            used.push(candidate.clone());
+            candidate
+        })
+        .collect();
 
-    let mut lines = Vec::new();
-    if !css.is_empty() {
-        lines.push(format!("import \"./{name}.css\";"));
-        lines.push(String::new());
+    let mut files = Vec::new();
+    let mut app = Vec::new();
+    if options.typescript {
+        app.push("import type { ComponentType } from \"react\";".to_owned());
     }
-    lines.extend([
+    if !css.is_empty() {
+        app.push("import \"./styles.css\";".to_owned());
+    }
+    for (page, component) in site.pages.iter().zip(&components) {
+        app.push(format!("import {component} from \"./pages/{component}\";"));
+        let root = OutputNode::Element(page.root.clone());
+        files.push(OutputFile {
+            path: format!("src/pages/{component}.{ext}"),
+            contents: [
+                format!("export default function {component}() {{"),
+                "  return (".to_owned(),
+                print_jsx(&root, 2),
+                "  );".to_owned(),
+                "}".to_owned(),
+                String::new(),
+            ]
+            .join("\n"),
+        });
+    }
+    let routes_type = if options.typescript {
+        ": Record<string, ComponentType>"
+    } else {
+        ""
+    };
+    app.push(String::new());
+    app.push(format!("const routes{routes_type} = {{"));
+    for (page, component) in site.pages.iter().zip(&components) {
+        app.push(format!("  {}: {component},", js_string(&page.path)));
+    }
+    app.extend([
+        "};".to_owned(),
+        String::new(),
         format!("export default function {name}() {{"),
-        "  return (".to_owned(),
-        print_jsx(&root, 2),
-        "  );".to_owned(),
+        "  const path = window.location.pathname.replace(/\\/+$/, \"\") || \"/\";".to_owned(),
+        format!("  const Page = routes[path] ?? {};", components[0]),
+        "  return <Page />;".to_owned(),
         "}".to_owned(),
         String::new(),
     ]);
-
-    let mut files = vec![OutputFile {
-        path: format!("src/{name}.{ext}"),
-        contents: lines.join("\n"),
-    }];
+    files.insert(
+        0,
+        OutputFile {
+            path: format!("src/{name}.{ext}"),
+            contents: app.join("\n"),
+        },
+    );
     if !css.is_empty() {
         files.push(OutputFile {
-            path: format!("src/{name}.css"),
+            path: "src/styles.css".into(),
             contents: css,
         });
     }
@@ -84,6 +136,22 @@ pub fn export_react(doc: &Document, options: &ReactOptions) -> Result<ExportResu
         target: "react".into(),
         files,
     })
+}
+
+/// A PascalCase component name for a page called `name`, such as `AboutUs`.
+fn component_name(name: &str) -> String {
+    let mut out = String::new();
+    for word in name.split(|c: char| !c.is_ascii_alphanumeric()) {
+        let mut chars = word.chars();
+        if let Some(first) = chars.next() {
+            out.push(first.to_ascii_uppercase());
+            out.extend(chars);
+        }
+    }
+    match out.chars().next() {
+        Some(c) if c.is_ascii_alphabetic() => out,
+        _ => format!("Page{out}"),
+    }
 }
 
 pub fn print_jsx(node: &OutputNode, depth: usize) -> String {

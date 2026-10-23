@@ -5,15 +5,15 @@ use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{Element, PointerEvent};
 
-use vellum_core::{find, find_mut, insert};
-use vellum_schema::{Geometry, Node, NodeKind, PathNode, Point, Shape, ShapeStyle, Style};
+use vellum_core::{find, insert};
+use vellum_schema::{Geometry, Node, NodeKind, PathNode, Point, Shape, ShapeStyle};
 use vellum_vector::{
     drawing_to_svg, ellipse_from_drag, is_meaningful, line_from_drag, path_data, pull_handles,
     rect_from_drag, translate,
 };
 
 use crate::shapes::shape_view;
-use crate::store::{is_typing, new_id, use_store, View};
+use crate::store::{is_typing, new_id, use_store, Store, View};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tool {
@@ -255,27 +255,22 @@ pub fn VectorCanvas() -> impl IntoView {
         let target = store.editing_node.get_untracked().filter(|id| {
             store
                 .doc
-                .with_untracked(|doc| find(&doc.nodes, id).is_some())
+                .with_untracked(|doc| doc.pages.iter().any(|p| find(&p.nodes, id).is_some()))
         });
         match target {
             Some(id) => store.commit(|doc| {
-                if let Some(n) = find_mut(&mut doc.nodes, &id) {
+                if let Some(n) = Store::find_mut(doc, &id) {
                     n.kind = NodeKind::Svg { drawing: d };
                 }
             }),
             None => {
-                let node = Node {
-                    id: new_id(),
-                    style: Style {
-                        align: vellum_schema::Align::Center,
-                        ..Style::default()
-                    },
-                    kind: NodeKind::Svg { drawing: d },
-                };
+                let mut node = Node::new(new_id(), NodeKind::Svg { drawing: d });
+                node.style.align = vellum_schema::Align::Center;
                 store.editing_node.set(Some(node.id.clone()));
                 store.commit(|doc| {
-                    let end = doc.nodes.len();
-                    insert(doc, None, end, node);
+                    let nodes = store.nodes_mut(doc);
+                    let end = nodes.len();
+                    insert(nodes, None, end, node);
                 });
             }
         }

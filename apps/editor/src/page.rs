@@ -13,6 +13,7 @@ use vellum_schema::{
 };
 
 use crate::shapes::shape_view;
+use crate::site::{override_fields, preview_width, BreakpointBar, PagesPanel};
 use crate::store::{new_id, use_store, Store, View};
 
 const NEW_TYPE: &str = "application/x-vellum-new";
@@ -59,7 +60,7 @@ impl Canvas {
     fn top_level_end(&self) -> DropTarget {
         DropTarget {
             parent: None,
-            at: self.store.doc.with_untracked(|d| d.nodes.len()),
+            at: self.store.doc.with_untracked(|d| self.store.nodes(d).len()),
         }
     }
 
@@ -72,13 +73,14 @@ impl Canvas {
         self.store
             .doc
             .with_untracked(|d| {
-                if let Some(len) = children(d, Some(&id)).map(Vec::len) {
+                let nodes = self.store.nodes(d);
+                if let Some(len) = children(nodes, Some(&id)).map(<[Node]>::len) {
                     return Some(DropTarget {
                         parent: Some(id),
                         at: len,
                     });
                 }
-                let (parent, i) = locate(d, &id)?;
+                let (parent, i) = locate(nodes, &id)?;
                 Some(DropTarget { parent, at: i + 1 })
             })
             .unwrap_or_else(|| self.top_level_end())
@@ -88,7 +90,12 @@ impl Canvas {
         if let Some(node) = new_node(type_name, new_id()) {
             let id = node.id.clone();
             self.store.commit(|d| {
-                insert(d, target.parent.as_deref(), target.at, node);
+                insert(
+                    self.store.nodes_mut(d),
+                    target.parent.as_deref(),
+                    target.at,
+                    node,
+                );
             });
             self.selected.set(Some(id));
         }
@@ -124,7 +131,7 @@ pub fn PageEditor() -> impl IntoView {
         if let Ok(id) = dt.get_data(MOVE_ID) {
             if !id.is_empty() {
                 store.commit(|d| {
-                    move_node(d, &id, target.parent.as_deref(), target.at);
+                    move_node(store.nodes_mut(d), &id, target.parent.as_deref(), target.at);
                 });
             }
         }
@@ -165,12 +172,14 @@ pub fn PageEditor() -> impl IntoView {
 
     let page_vars = move || {
         let dark = store.dark_preview.get();
-        store.doc.with(|d| inline_style(d.tokens.variables(dark)))
+        let width = preview_width(store.breakpoint.get());
+        store.doc.with(|d| inline_style(d.tokens.variables(dark))) + width
     };
 
     view! {
         <div class="workspace">
             <aside class="panel palette">
+                <PagesPanel selected=c.selected />
                 <h2>"Blocks"</h2>
                 <p class="hint">"Drag onto the page or into a Stack, Row or Grid. Click to add next to the selected block."</p>
                 {palette}
@@ -182,17 +191,23 @@ pub fn PageEditor() -> impl IntoView {
                 on:dragover=over_empty
                 on:drop=on_drop
             >
+                <div class="stage-inner">
+                <BreakpointBar />
                 <div class="page" class:dark=move || store.dark_preview.get() style=page_vars on:dragover=over_empty>
                     {move || {
+                        store.page.track();
                         store
                             .doc
-                            .with(|d| d.nodes.is_empty())
+                            .with(|d| store.nodes(d).is_empty())
                             .then(|| view! { <div class="empty">"Drop blocks here to start your page."</div> })
                     }}
                     {move || {
-                        let nodes = store.doc.with(|d| d.nodes.clone());
+                        store.page.track();
+                        store.breakpoint.track();
+                        let nodes = store.doc.with(|d| store.nodes(d).clone());
                         block_list(c, None, false, nodes)
                     }}
+                </div>
                 </div>
             </main>
 
@@ -226,6 +241,7 @@ fn block_row(
     let (id_sel, id_click, id_into, id_drag) = (id.clone(), id.clone(), id.clone(), id.clone());
     let (p_before, p_after, p_over) = (parent.clone(), parent.clone(), parent);
     let child_count = node.children().map(Vec::len);
+    let hidden_here = node.override_at(c.store.breakpoint.get_untracked()).hidden;
 
     let on_dragover = move |ev: DragEvent| {
         if !is_our_drag(&ev) {
@@ -265,6 +281,8 @@ fn block_row(
         <div
             class="block"
             class:horizontal=horizontal
+            class:hidden-here=hidden_here
+            title=hidden_here.then_some("Hidden at this breakpoint")
             class:selected=move || c.selected.with(|s| s.as_deref() == Some(id_sel.as_str()))
             class:drop-before=move || c.is_drop(&p_before, i)
             class:drop-after=move || is_last && c.is_drop(&p_after, i + 1)
@@ -312,7 +330,9 @@ fn inline_style<P: AsRef<str>>(declarations: Vec<(P, String)>) -> String {
 
 /// Renders a block as it will appear on the published page.
 fn block_view(c: Canvas, node: &Node) -> AnyView {
-    let s = &node.style;
+    // What the block looks like at the previewed breakpoint.
+    let o = node.override_at(c.store.breakpoint.get_untracked());
+    let s = &o.apply_style(&node.style);
     let style = inline_style(s.declarations());
     match &node.kind {
         NodeKind::Heading { text, level } => {
@@ -358,6 +378,7 @@ fn block_view(c: Canvas, node: &Node) -> AnyView {
             .into_any()
         }
         NodeKind::Container { layout, children } => {
+            let layout = &o.apply_layout(layout);
             let mut declarations = s.declarations();
             declarations.extend(layout.declarations());
             let empty = children.is_empty().then(|| {
@@ -370,6 +391,24 @@ fn block_view(c: Canvas, node: &Node) -> AnyView {
                 </div>
             }
             .into_any()
+        }
+        NodeKind::Nav {} => {
+            let current = c.store.page.get_untracked();
+            let links = c.store.doc.with_untracked(|d| {
+                let current = &d.page_or_home(&current).id;
+                d.pages
+                    .iter()
+                    .map(|p| {
+                        let here = (&p.id == current).then_some("page");
+                        view! {
+                            <a class="blk-nav-link" href=p.path.clone() aria-current=here on:click=|ev| ev.prevent_default()>
+                                {p.name.clone()}
+                            </a>
+                        }
+                    })
+                    .collect_view()
+            });
+            view! { <nav class="blk-nav" style=style>{links}</nav> }.into_any()
         }
     }
 }
@@ -389,13 +428,13 @@ enum Input {
 fn read<T: Default>(store: Store, id: &str, f: impl Fn(&Node) -> T) -> T {
     store
         .doc
-        .with(|d| find(&d.nodes, id).map(f).unwrap_or_default())
+        .with(|d| find(store.nodes(d), id).map(f).unwrap_or_default())
 }
 
 /// One step of a continuous edit (typing, dragging a slider) on node `id`.
 fn edit(store: Store, id: &str, f: impl FnOnce(&mut Node)) {
     store.edit(|d| {
-        if let Some(n) = find_mut(&mut d.nodes, id) {
+        if let Some(n) = find_mut(store.nodes_mut(d), id) {
             f(n);
         }
     });
@@ -404,7 +443,7 @@ fn edit(store: Store, id: &str, f: impl FnOnce(&mut Node)) {
 /// A discrete change (picking from a list) on node `id`, as its own undo step.
 fn commit(store: Store, id: &str, f: impl FnOnce(&mut Node)) {
     store.commit(|d| {
-        if let Some(n) = find_mut(&mut d.nodes, id) {
+        if let Some(n) = find_mut(store.nodes_mut(d), id) {
             f(n);
         }
     });
@@ -771,15 +810,17 @@ fn Inspector(selected: RwSignal<Option<NodeId>>) -> impl IntoView {
     // Rebuild only when the selection (or the selected block's existence) changes, not on every edit.
     let target = Memo::new(move |_| {
         let id = selected.get()?;
+        store.page.track();
         store
             .doc
-            .with(|d| find(&d.nodes, &id).map(|n| (id.clone(), n.kind.type_name())))
+            .with(|d| find(store.nodes(d), &id).map(|n| (id.clone(), n.kind.type_name())))
     });
 
     move || {
         let Some((id, type_name)) = target.get() else {
             return view! { <p class="hint">"Select a block to edit it."</p> }.into_any();
         };
+        let breakpoint = store.breakpoint.get();
         let f =
             |label, input, (get, set): Accessor| field(store, id.clone(), label, input, get, set);
 
@@ -802,11 +843,15 @@ fn Inspector(selected: RwSignal<Option<NodeId>>) -> impl IntoView {
             .into_any(),
             "spacer" => f("Height", Input::Range(8.0, 240.0), kind_field!(Spacer, height)),
             "container" => layout_fields(store, id.clone()),
+            "nav" => view! {
+                <p class="hint">"Links to every page, in the order listed under Pages. The open page's link is highlighted."</p>
+            }
+            .into_any(),
             _ => {
                 let id = id.clone();
                 let open = move |_| {
                     let Some(drawing) = store.doc.with_untracked(|d| {
-                        find(&d.nodes, &id).and_then(|n| match &n.kind {
+                        find(store.nodes(d), &id).and_then(|n| match &n.kind {
                             NodeKind::Svg { drawing } => Some(drawing.clone()),
                             _ => None,
                         })
@@ -852,20 +897,23 @@ fn Inspector(selected: RwSignal<Option<NodeId>>) -> impl IntoView {
         });
 
         let (id_up, id_down, id_del) = (id.clone(), id.clone(), id.clone());
-        let label = store
-            .doc
-            .with_untracked(|d| find(&d.nodes, &id).map(tag_label).unwrap_or(type_name));
+        let label = store.doc.with_untracked(|d| {
+            find(store.nodes(d), &id)
+                .map(tag_label)
+                .unwrap_or(type_name)
+        });
         view! {
             <div class="inspector">
                 <h3>{label}</h3>
+                {breakpoint.map(|bp| override_fields(store, id.clone(), bp))}
                 {content}
                 {text_style}
                 {color_field(store, id.clone(), "Background", true, |n| n.style.background.clone(), |n, v| n.style.background = v)}
                 <div class="row actions">
-                    <button type="button" title="Move up" on:click=move |_| store.commit(|d| { nudge(d, &id_up, -1); })>
+                    <button type="button" title="Move up" on:click=move |_| store.commit(|d| { nudge(store.nodes_mut(d), &id_up, -1); })>
                         "↑"
                     </button>
-                    <button type="button" title="Move down" on:click=move |_| store.commit(|d| { nudge(d, &id_down, 1); })>
+                    <button type="button" title="Move down" on:click=move |_| store.commit(|d| { nudge(store.nodes_mut(d), &id_down, 1); })>
                         "↓"
                     </button>
                     <button
@@ -873,7 +921,7 @@ fn Inspector(selected: RwSignal<Option<NodeId>>) -> impl IntoView {
                         class="danger"
                         on:click=move |_| {
                             store.commit(|d| {
-                                remove(d, &id_del);
+                                remove(store.nodes_mut(d), &id_del);
                             });
                             selected.set(None);
                         }

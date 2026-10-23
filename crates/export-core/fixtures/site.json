@@ -1,0 +1,300 @@
+{
+  "version": 3,
+  "title": "Alpaca & Co",
+  "pages": [
+    {
+      "id": "home",
+      "name": "Home",
+      "path": "/",
+      "nodes": [
+        {
+          "id": "nav",
+          "type": "nav",
+          "style": {
+            "align": "left",
+            "color": "{text}",
+            "background": null,
+            "padding": "{sm}"
+          },
+          "responsive": {
+            "mobile": {
+              "align": "center"
+            }
+          }
+        },
+        {
+          "id": "title",
+          "type": "heading",
+          "level": 1,
+          "text": "Build sites <fast>",
+          "style": {
+            "align": "center",
+            "color": "{text}",
+            "background": null,
+            "padding": "{lg}",
+            "font": "display"
+          }
+        },
+        {
+          "id": "intro",
+          "type": "text",
+          "text": "Drag blocks, draw a {logo}, export.\nThen ship it.",
+          "style": {
+            "align": "left",
+            "color": "#4a4560",
+            "background": "#f4f3f8",
+            "padding": 16
+          }
+        },
+        {
+          "id": "cta",
+          "type": "button",
+          "label": "Get started",
+          "href": "/pricing#plans",
+          "style": {
+            "align": "center",
+            "color": "#1f1b2e",
+            "background": null,
+            "padding": 16
+          }
+        },
+        {
+          "id": "gap",
+          "type": "spacer",
+          "height": 32,
+          "style": {
+            "align": "left",
+            "color": "#1f1b2e",
+            "background": null,
+            "padding": 16
+          },
+          "responsive": {
+            "mobile": {
+              "hidden": true
+            }
+          }
+        },
+        {
+          "id": "shot",
+          "type": "image",
+          "src": "hero.png",
+          "alt": "Screenshot of the \"editor\"",
+          "style": {
+            "align": "center",
+            "color": "#1f1b2e",
+            "background": null,
+            "padding": 16
+          }
+        },
+        {
+          "id": "logo",
+          "type": "svg",
+          "drawing": {
+            "width": 200,
+            "height": 100,
+            "shapes": [
+              {
+                "id": "r",
+                "kind": "rect",
+                "x": 10,
+                "y": 10,
+                "w": 80,
+                "h": 60,
+                "style": {
+                  "fill": "#7c5cff",
+                  "stroke": "#1f1b2e",
+                  "stroke_width": 2
+                }
+              },
+              {
+                "id": "e",
+                "kind": "ellipse",
+                "cx": 140,
+                "cy": 40,
+                "rx": 30,
+                "ry": 20,
+                "style": {
+                  "fill": "#f4c542",
+                  "stroke": "#1f1b2e",
+                  "stroke_width": 1.5
+                }
+              },
+              {
+                "id": "l",
+                "kind": "line",
+                "x1": 10,
+                "y1": 90,
+                "x2": 190,
+                "y2": 90,
+                "style": {
+                  "fill": "#000",
+                  "stroke": "#1f1b2e",
+                  "stroke_width": 3
+                }
+              },
+              {
+                "id": "p",
+                "kind": "path",
+                "closed": false,
+                "nodes": [
+                  {
+                    "x": 100,
+                    "y": 80
+                  },
+                  {
+                    "x": 160,
+                    "y": 80,
+                    "handle_in": {
+                      "x": 130,
+                      "y": 60
+                    }
+                  }
+                ],
+                "style": {
+                  "fill": "#7c5cff",
+                  "stroke": "#6d4aff",
+                  "stroke_width": 2
+                }
+              }
+            ]
+          },
+          "style": {
+            "align": "center",
+            "color": "#1f1b2e",
+            "background": null,
+            "padding": 16
+          }
+        },
+        {
+          "id": "features",
+          "type": "container",
+          "layout": {
+            "mode": "grid",
+            "direction": "column",
+            "wrap": false,
+            "columns": 3,
+            "gap": "{lg}",
+            "align": "start",
+            "justify": "start"
+          },
+          "style": {
+            "align": "left",
+            "color": "{text}",
+            "background": "{surface}",
+            "padding": "{xl}"
+          },
+          "children": [
+            {
+              "id": "f1",
+              "type": "text",
+              "text": "Design tokens",
+              "style": {
+                "align": "left",
+                "color": "{muted}",
+                "background": null,
+                "padding": "{sm}",
+                "font": "body"
+              }
+            },
+            {
+              "id": "f2",
+              "type": "text",
+              "text": "Flex and grid",
+              "style": {
+                "align": "left",
+                "color": "{muted}",
+                "background": null,
+                "padding": "{sm}",
+                "font": "body"
+              }
+            },
+            {
+              "id": "actions",
+              "type": "container",
+              "layout": {
+                "mode": "flex",
+                "direction": "row",
+                "wrap": true,
+                "columns": 2,
+                "gap": 8,
+                "align": "center",
+                "justify": "between"
+              },
+              "style": {
+                "align": "left",
+                "color": "{text}",
+                "background": null,
+                "padding": 0
+              },
+              "children": [
+                {
+                  "id": "more",
+                  "type": "button",
+                  "label": "Learn more",
+                  "href": "/docs",
+                  "style": {
+                    "align": "left",
+                    "color": "{text}",
+                    "background": null,
+                    "padding": 0
+                  }
+                }
+              ]
+            }
+          ],
+          "responsive": {
+            "tablet": {
+              "columns": 2
+            },
+            "mobile": {
+              "gap": "{sm}",
+              "padding": "{xs}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "pricing",
+      "name": "Pricing & Plans",
+      "path": "/pricing",
+      "nodes": [
+        {
+          "id": "nav2",
+          "type": "nav",
+          "style": {
+            "align": "left",
+            "color": "{text}",
+            "background": null,
+            "padding": "{sm}"
+          }
+        },
+        {
+          "id": "ph",
+          "type": "heading",
+          "text": "Pricing",
+          "level": 1,
+          "style": {
+            "align": "left",
+            "color": "{text}",
+            "background": null,
+            "padding": "{md}",
+            "font": "display"
+          }
+        },
+        {
+          "id": "pb",
+          "type": "button",
+          "label": "Back home",
+          "href": "/",
+          "style": {
+            "align": "left",
+            "color": "{text}",
+            "background": null,
+            "padding": "{md}"
+          }
+        }
+      ]
+    }
+  ]
+}

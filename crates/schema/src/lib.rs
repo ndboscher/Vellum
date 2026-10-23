@@ -4,24 +4,28 @@
 //! mutates them through `vellum-core`, the vector tools build [`Shape`]s, the
 //! exporters turn a [`Document`] into code and the server stores it as JSON.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 /// Bumped whenever the serialized shape changes, so old files can be migrated.
 ///
-/// Version 2 added design [`Tokens`] and [`NodeKind::Container`]. Version 1 files still load:
-/// they get the default tokens, and their flat block list becomes the page's top level.
-pub const SCHEMA_VERSION: u32 = 2;
+/// Version 2 added design [`Tokens`] and [`NodeKind::Container`]. Version 3 made the document a
+/// site of [`Page`]s and added per-breakpoint [`Override`]s and [`NodeKind::Nav`]. Older files
+/// still load: they get the default tokens, and their block list becomes the home page.
+pub const SCHEMA_VERSION: u32 = 3;
 
 pub type NodeId = String;
 
+/// A site: shared tokens and one or more pages.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(from = "DocumentRepr")]
 pub struct Document {
     pub version: u32,
     pub title: String,
-    #[serde(default)]
     pub tokens: Tokens,
-    /// The page's top level, stacked vertically. Containers hold further nodes.
-    pub nodes: Vec<Node>,
+    /// In navigation order. The first page is the home page, at `/`.
+    pub pages: Vec<Page>,
 }
 
 impl Default for Document {
@@ -30,7 +34,105 @@ impl Default for Document {
             version: SCHEMA_VERSION,
             title: "Untitled site".into(),
             tokens: Tokens::default(),
-            nodes: Vec::new(),
+            pages: vec![Page::home(Vec::new())],
+        }
+    }
+}
+
+impl Document {
+    pub fn page(&self, id: &str) -> Option<&Page> {
+        self.pages.iter().find(|p| p.id == id)
+    }
+
+    pub fn page_mut(&mut self, id: &str) -> Option<&mut Page> {
+        self.pages.iter_mut().find(|p| p.id == id)
+    }
+
+    /// The page with this id, or the home page if it is gone (say, after an undo).
+    pub fn page_or_home(&self, id: &str) -> &Page {
+        self.page(id)
+            .or(self.pages.first())
+            .expect("a document always has a page")
+    }
+
+    pub fn page_or_home_mut(&mut self, id: &str) -> &mut Page {
+        let i = self.pages.iter().position(|p| p.id == id).unwrap_or(0);
+        &mut self.pages[i]
+    }
+
+    /// The page a site-relative link like `/about#team` points at, if any.
+    pub fn page_for_link(&self, href: &str) -> Option<&Page> {
+        let path = href.split(['#', '?']).next()?;
+        if !path.starts_with('/') {
+            return None;
+        }
+        let path = match path.trim_end_matches('/') {
+            "" => "/",
+            p => p,
+        };
+        self.pages.iter().find(|p| p.path == path)
+    }
+}
+
+/// Reads every schema version: versions 1 and 2 had one page's `nodes` at the top level.
+#[derive(Deserialize)]
+struct DocumentRepr {
+    version: u32,
+    title: String,
+    #[serde(default)]
+    tokens: Tokens,
+    #[serde(default)]
+    pages: Vec<Page>,
+    #[serde(default)]
+    nodes: Option<Vec<Node>>,
+}
+
+impl From<DocumentRepr> for Document {
+    fn from(repr: DocumentRepr) -> Self {
+        let mut pages = repr.pages;
+        if pages.is_empty() {
+            pages.push(Page::home(repr.nodes.unwrap_or_default()));
+        }
+        Self {
+            version: repr.version.max(SCHEMA_VERSION),
+            title: repr.title,
+            tokens: repr.tokens,
+            pages,
+        }
+    }
+}
+
+/// One page of the site.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Page {
+    pub id: NodeId,
+    /// Shown in navigation and the browser tab.
+    pub name: String,
+    /// `/` for the home page, otherwise `/` and a slug, such as `/about`.
+    pub path: String,
+    /// The page's top level, stacked vertically. Containers hold further nodes.
+    pub nodes: Vec<Node>,
+}
+
+impl Page {
+    pub fn home(nodes: Vec<Node>) -> Self {
+        Self {
+            id: "home".into(),
+            name: "Home".into(),
+            path: "/".into(),
+            nodes,
+        }
+    }
+
+    pub fn is_home(&self) -> bool {
+        self.path == "/"
+    }
+
+    /// A file-name-safe stem for this page: `index` for the home page, else its slug.
+    pub fn file_stem(&self) -> String {
+        match css::slug(&self.path) {
+            s if s.is_empty() => "index".into(),
+            s => s,
         }
     }
 }
@@ -43,6 +145,9 @@ pub struct Node {
     pub style: Style,
     #[serde(flatten)]
     pub kind: NodeKind,
+    /// Style changes below each breakpoint's width.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub responsive: BTreeMap<Breakpoint, Override>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -74,9 +179,20 @@ pub enum NodeKind {
         layout: Layout,
         children: Vec<Node>,
     },
+    /// Links to every page of the site, in page order.
+    Nav {},
 }
 
 impl Node {
+    pub fn new(id: impl Into<NodeId>, kind: NodeKind) -> Self {
+        Self {
+            id: id.into(),
+            style: Style::default(),
+            kind,
+            responsive: BTreeMap::new(),
+        }
+    }
+
     /// The nested nodes, if this is a container.
     pub fn children(&self) -> Option<&Vec<Node>> {
         match &self.kind {
@@ -103,6 +219,7 @@ impl NodeKind {
             NodeKind::Spacer { .. } => "spacer",
             NodeKind::Svg { .. } => "svg",
             NodeKind::Container { .. } => "container",
+            NodeKind::Nav {} => "nav",
         }
     }
 }
@@ -532,6 +649,163 @@ css_enum!(Justify {
     Between => "between", "space-between",
 });
 
+/// A viewport width below which a node's [`Override`]s apply. Styles are desktop-first: the
+/// base style is the widest layout, and each breakpoint adjusts it for narrower screens.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Breakpoint {
+    Tablet,
+    Mobile,
+}
+
+impl Breakpoint {
+    /// Widest first, the order their rules cascade in.
+    pub const ALL: [Breakpoint; 2] = [Breakpoint::Tablet, Breakpoint::Mobile];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Breakpoint::Tablet => "tablet",
+            Breakpoint::Mobile => "mobile",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Breakpoint::Tablet => "Tablet",
+            Breakpoint::Mobile => "Mobile",
+        }
+    }
+
+    /// The overrides apply at this width in px and below.
+    pub fn max_width(self) -> u32 {
+        match self {
+            Breakpoint::Tablet => 900,
+            Breakpoint::Mobile => 600,
+        }
+    }
+
+    pub fn media(self) -> String {
+        format!("@media (max-width: {}px)", self.max_width())
+    }
+}
+
+/// Changes to a node's style at one [`Breakpoint`]. Unset fields keep the wider value.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Override {
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub align: Option<Align>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub padding: Option<Length>,
+    /// Name of a type token.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font: Option<String>,
+    /// Containers with a flex layout only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub direction: Option<Direction>,
+    /// Containers with a grid layout only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub columns: Option<u8>,
+    /// Containers only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gap: Option<Length>,
+}
+
+impl Override {
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// Layers `narrower` on top of this one: its set fields win.
+    pub fn merge(&mut self, narrower: &Override) {
+        self.hidden |= narrower.hidden;
+        macro_rules! take {
+            ($($field:ident),+) => {
+                $(if narrower.$field.is_some() {
+                    self.$field = narrower.$field.clone();
+                })+
+            };
+        }
+        take!(align, padding, font, direction, columns, gap);
+    }
+
+    pub fn apply_style(&self, style: &Style) -> Style {
+        Style {
+            align: self.align.unwrap_or(style.align),
+            padding: self
+                .padding
+                .clone()
+                .unwrap_or_else(|| style.padding.clone()),
+            font: self.font.clone().or_else(|| style.font.clone()),
+            ..style.clone()
+        }
+    }
+
+    pub fn apply_layout(&self, layout: &Layout) -> Layout {
+        Layout {
+            direction: self.direction.unwrap_or(layout.direction),
+            columns: self.columns.unwrap_or(layout.columns),
+            gap: self.gap.clone().unwrap_or_else(|| layout.gap.clone()),
+            ..layout.clone()
+        }
+    }
+
+    /// The CSS declarations this override adds inside its breakpoint's media query, for `node`.
+    pub fn declarations(&self, node: &Node) -> Vec<(&'static str, String)> {
+        let mut out = Vec::new();
+        if self.hidden {
+            out.push(("display", "none".to_owned()));
+        }
+        // A spacer's look is its height and background, so only hiding applies to it.
+        if matches!(node.kind, NodeKind::Spacer { .. }) {
+            return out;
+        }
+        if let Some(align) = self.align {
+            out.push(("text-align", align.as_css().to_owned()));
+        }
+        if let Some(padding) = &self.padding {
+            out.push(("padding", padding.to_css()));
+        }
+        if let Some(font) = &self.font {
+            out.push(("font", css::var("font", font)));
+        }
+        if let NodeKind::Container { layout, .. } = &node.kind {
+            match (layout.mode, self.direction, self.columns) {
+                (LayoutMode::Flex, Some(direction), _) => {
+                    out.push(("flex-direction", direction.as_css().to_owned()))
+                }
+                (LayoutMode::Grid, _, Some(columns)) => out.push((
+                    "grid-template-columns",
+                    format!("repeat({}, minmax(0, 1fr))", columns.max(1)),
+                )),
+                _ => {}
+            }
+            if let Some(gap) = &self.gap {
+                out.push(("gap", gap.to_css()));
+            }
+        }
+        out
+    }
+}
+
+impl Node {
+    /// Every override that applies at `breakpoint` (`None` is desktop), merged widest first.
+    pub fn override_at(&self, breakpoint: Option<Breakpoint>) -> Override {
+        let mut out = Override::default();
+        let Some(narrowest) = breakpoint else {
+            return out;
+        };
+        for bp in Breakpoint::ALL.into_iter().filter(|bp| *bp <= narrowest) {
+            if let Some(o) = self.responsive.get(&bp) {
+                out.merge(o);
+            }
+        }
+        out
+    }
+}
+
 /// CSS spelling shared by the editor canvas and the exporters.
 pub mod css {
     use super::parse_token_ref;
@@ -680,80 +954,179 @@ mod tests {
 
     #[test]
     fn document_round_trips_through_json() {
-        let doc = Document {
+        let mut doc = Document {
             title: "Demo".into(),
-            nodes: vec![
-                Node {
-                    id: "h".into(),
-                    style: Style::default(),
-                    kind: NodeKind::Heading {
-                        text: "Hi".into(),
-                        level: 1,
-                    },
+            ..Document::default()
+        };
+        doc.pages[0].nodes = vec![
+            Node {
+                id: "h".into(),
+                style: Style::default(),
+                kind: NodeKind::Heading {
+                    text: "Hi".into(),
+                    level: 1,
                 },
-                Node {
-                    id: "v".into(),
-                    style: Style {
-                        align: Align::Center,
-                        ..Style::default()
-                    },
-                    kind: NodeKind::Svg {
-                        drawing: Drawing {
-                            width: 100.0,
-                            height: 50.0,
-                            shapes: vec![Shape {
-                                id: "p".into(),
-                                style: ShapeStyle::default(),
-                                geometry: Geometry::Path {
-                                    nodes: vec![
-                                        PathNode::corner(0.0, 0.0),
-                                        PathNode {
-                                            handle_out: Some(Point::new(5.0, 5.0)),
-                                            ..PathNode::corner(10.0, 0.0)
-                                        },
-                                    ],
-                                    closed: false,
-                                },
-                            }],
-                        },
-                    },
+                responsive: BTreeMap::new(),
+            },
+            Node {
+                id: "v".into(),
+                style: Style {
+                    align: Align::Center,
+                    ..Style::default()
                 },
-                Node {
-                    id: "row".into(),
-                    style: Style::default(),
-                    kind: NodeKind::Container {
-                        layout: Layout::row(),
-                        children: vec![Node {
-                            id: "c".into(),
-                            style: Style {
-                                padding: Length::Px(4.0),
-                                font: Some("body".into()),
-                                ..Style::default()
+                kind: NodeKind::Svg {
+                    drawing: Drawing {
+                        width: 100.0,
+                        height: 50.0,
+                        shapes: vec![Shape {
+                            id: "p".into(),
+                            style: ShapeStyle::default(),
+                            geometry: Geometry::Path {
+                                nodes: vec![
+                                    PathNode::corner(0.0, 0.0),
+                                    PathNode {
+                                        handle_out: Some(Point::new(5.0, 5.0)),
+                                        ..PathNode::corner(10.0, 0.0)
+                                    },
+                                ],
+                                closed: false,
                             },
-                            kind: NodeKind::Text { text: "in".into() },
                         }],
                     },
                 },
-            ],
-            ..Document::default()
-        };
+                responsive: BTreeMap::new(),
+            },
+            Node {
+                id: "row".into(),
+                style: Style::default(),
+                kind: NodeKind::Container {
+                    layout: Layout::row(),
+                    children: vec![Node {
+                        id: "c".into(),
+                        style: Style {
+                            padding: Length::Px(4.0),
+                            font: Some("body".into()),
+                            ..Style::default()
+                        },
+                        kind: NodeKind::Text { text: "in".into() },
+                        responsive: BTreeMap::new(),
+                    }],
+                },
+                responsive: BTreeMap::from([(
+                    Breakpoint::Mobile,
+                    Override {
+                        direction: Some(Direction::Column),
+                        hidden: true,
+                        ..Override::default()
+                    },
+                )]),
+            },
+        ];
+        doc.pages.push(Page {
+            id: "about".into(),
+            name: "About".into(),
+            path: "/about".into(),
+            nodes: vec![Node::new("n", NodeKind::Nav {})],
+        });
         let json = serde_json::to_string(&doc).unwrap();
         assert_eq!(serde_json::from_str::<Document>(&json).unwrap(), doc);
     }
 
     #[test]
     fn node_json_is_flat_and_tagged() {
-        let node = Node {
-            id: "t".into(),
-            style: Style::default(),
-            kind: NodeKind::Text { text: "x".into() },
-        };
+        let node = Node::new("t", NodeKind::Text { text: "x".into() });
         let v = serde_json::to_value(&node).unwrap();
         assert_eq!(v["type"], "text");
         assert_eq!(v["text"], "x");
         assert_eq!(v["style"]["align"], "left");
         assert_eq!(v["style"]["color"], "{text}");
         assert_eq!(v["style"]["padding"], "{md}");
+        assert!(v.get("responsive").is_none());
+    }
+
+    #[test]
+    fn version_2_documents_become_a_home_page() {
+        let json = r#"{"version":2,"title":"Two","tokens":{"colors":[],"fonts":[],"spacing":[]},
+            "nodes":[{"id":"t","type":"text","text":"x","style":{"align":"left","color":"{text}",
+            "background":null,"padding":"{md}"}}]}"#;
+        let doc: Document = serde_json::from_str(json).unwrap();
+        assert_eq!(doc.pages.len(), 1);
+        assert_eq!(doc.pages[0].path, "/");
+        assert_eq!(doc.pages[0].nodes[0].id, "t");
+        assert!(serde_json::to_value(&doc).unwrap().get("nodes").is_none());
+    }
+
+    #[test]
+    fn finds_pages_by_link() {
+        let mut doc = Document::default();
+        doc.pages.push(Page {
+            id: "a".into(),
+            name: "About".into(),
+            path: "/about".into(),
+            nodes: vec![],
+        });
+        let id = |href| doc.page_for_link(href).map(|p| p.id.as_str());
+        assert_eq!(id("/about"), Some("a"));
+        assert_eq!(id("/about/#team"), Some("a"));
+        assert_eq!(id("/?q=1"), Some("home"));
+        assert_eq!(id("about"), None);
+        assert_eq!(id("https://example.com/about"), None);
+        assert_eq!(doc.pages[1].file_stem(), "about");
+        assert_eq!(doc.pages[0].file_stem(), "index");
+    }
+
+    #[test]
+    fn overrides_cascade_from_wider_breakpoints() {
+        let mut node = Node::new(
+            "g",
+            NodeKind::Container {
+                layout: Layout::grid(3),
+                children: vec![],
+            },
+        );
+        node.responsive.insert(
+            Breakpoint::Tablet,
+            Override {
+                columns: Some(2),
+                align: Some(Align::Center),
+                ..Override::default()
+            },
+        );
+        node.responsive.insert(
+            Breakpoint::Mobile,
+            Override {
+                columns: Some(1),
+                direction: Some(Direction::Row),
+                ..Override::default()
+            },
+        );
+        assert!(node.override_at(None).is_empty());
+        let mobile = node.override_at(Some(Breakpoint::Mobile));
+        assert_eq!(mobile.columns, Some(1));
+        assert_eq!(mobile.align, Some(Align::Center));
+        assert_eq!(mobile.apply_style(&node.style).align, Align::Center);
+        // Direction is flex-only, so a grid ignores it.
+        assert_eq!(
+            node.responsive[&Breakpoint::Mobile].declarations(&node),
+            [(
+                "grid-template-columns",
+                "repeat(1, minmax(0, 1fr))".to_owned()
+            )]
+        );
+        let json = serde_json::to_value(&node).unwrap();
+        assert_eq!(json["responsive"]["tablet"]["columns"], 2);
+        assert!(json["responsive"]["tablet"].get("hidden").is_none());
+    }
+
+    #[test]
+    fn hiding_a_spacer_is_its_only_override() {
+        let spacer = Node::new("s", NodeKind::Spacer { height: 8.0 });
+        let o = Override {
+            hidden: true,
+            padding: Some(Length::Px(4.0)),
+            ..Override::default()
+        };
+        assert_eq!(o.declarations(&spacer), [("display", "none".to_owned())]);
     }
 
     #[test]
@@ -761,9 +1134,13 @@ mod tests {
         let json = r##"{"version":1,"title":"Old","nodes":[{"id":"t","type":"text","text":"x",
             "style":{"align":"left","color":"#000","background":null,"padding":16}}]}"##;
         let doc: Document = serde_json::from_str(json).unwrap();
+        assert_eq!(doc.version, SCHEMA_VERSION);
         assert_eq!(doc.tokens, Tokens::default());
-        assert_eq!(doc.nodes[0].style.padding, Length::Px(16.0));
-        assert_eq!(doc.nodes[0].style.font, None);
+        let home = &doc.pages[0];
+        assert!(home.is_home());
+        assert_eq!(home.nodes[0].style.padding, Length::Px(16.0));
+        assert_eq!(home.nodes[0].style.font, None);
+        assert!(home.nodes[0].responsive.is_empty());
     }
 
     #[test]

@@ -12,21 +12,21 @@ registry
 
 let mut options = ExportOptions::new();
 options.insert("componentName".into(), "Landing".into());
-let result = registry.export("react", &document, &options)?; // src/Landing.jsx, src/Landing.css
+let result = registry.export("react", &document, &options)?; // src/Landing.jsx, src/pages/*.jsx, src/styles.css
 ```
 
 From the command line: `vellum export --target react --set componentName=Landing --out app/`.
 
 ## Pipeline
 
-1. **`Document`** (`crates/schema`) is the page the editor produces.
-2. **`lower_document`** (`src/lower.rs`) converts it once into a target-neutral element tree plus CSS rules. Shared decisions live here: which tag each block becomes, class names, base styles copied from the editor canvas so exports look like what was built, vector drawings as inline SVG (path data from `vellum-vector`), and sanitizing (script URLs become `#`, style values that could break out of a rule are dropped).
+1. **`Document`** (`crates/schema`) is the site the editor produces: tokens and one or more pages.
+2. **`lower_site`** (`src/lower.rs`) converts it once into a target-neutral element tree per page plus one set of CSS rules shared by every page. The caller passes how it links to a page (`about.html`, `/about`), and links to a site path like `/about#team` are rewritten with it. Breakpoint overrides become `@media (max-width: …)` rules after the base rules, widest first. Shared decisions live here: which tag each block becomes, class names, base styles copied from the editor canvas so exports look like what was built, vector drawings as inline SVG (path data from `vellum-vector`), and sanitizing (script URLs become `#`, style values that could break out of a rule are dropped).
 3. **Exporters** print that tree in their own syntax and return `OutputFile`s.
 
 | Target | Crate | Options | Files |
 | --- | --- | --- | --- |
-| `html` | `export-html` | `inlineCss` | `index.html`, `styles.css` (omitted when inlined) |
-| `react` | `export-react` | `componentName` (default `Page`), `typescript` | `src/<Name>.jsx` or `.tsx`, `src/<Name>.css` |
+| `html` | `export-html` | `inlineCss` | one `<page>.html` per page (`index.html` for `/`), `styles.css` (omitted when inlined) |
+| `react` | `export-react` | `componentName` (default `App`), `typescript` | `src/<Name>.jsx` or `.tsx` (picks a page by URL path), `src/pages/<Page>.jsx`, `src/styles.css` |
 
 Options arrive as a JSON map so the CLI, server and editor can pass them through untouched. Each target parses them into a typed struct with `parse_options`, and unknown keys are rejected so typos surface.
 
@@ -43,8 +43,8 @@ impl Exporter for VueExporter {
     fn id(&self) -> &'static str { "vue" }
     fn label(&self) -> &'static str { "Vue" }
     fn export(&self, doc: &Document, options: &ExportOptions) -> Result<ExportResult, ExportError> {
-        let page = lower_document(doc);
-        // print page.root as a <template>, print_css(&page.rules) as a <style> block
+        let site = lower_site(doc, &|page| page.path.clone());
+        // print each page's root as a <template>, print_css(&site.rules) as a stylesheet
         todo!()
     }
 }
@@ -54,4 +54,4 @@ Markup targets (Vue, Svelte, Astro) only need a printer for the element tree. No
 
 ## Tests
 
-`crates/export-core/fixtures/landing.json` covers every block and shape type. Exporter output is checked with `insta` snapshots in each target crate; after an intended output change, run `cargo insta review` (or `INSTA_UPDATE=always cargo test`).
+`crates/export-core/fixtures/landing.json` covers every block and shape type, and stays a version 2 file so loading old documents keeps working. `fixtures/site.json` is a two-page version 3 site with navigation, page links and breakpoint overrides. Exporter output is checked with `insta` snapshots in each target crate; after an intended output change, run `cargo insta review` (or `INSTA_UPDATE=always cargo test`).
