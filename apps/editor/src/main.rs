@@ -1,5 +1,6 @@
 //! The Vellum editor, compiled to WebAssembly and mounted into the page.
 
+mod animate;
 mod app;
 mod page;
 mod persistence;

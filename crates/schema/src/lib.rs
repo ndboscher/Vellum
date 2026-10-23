@@ -12,9 +12,10 @@ use serde::{Deserialize, Serialize};
 ///
 /// Version 2 added design [`Tokens`] and [`NodeKind::Container`]. Version 3 made the document a
 /// site of [`Page`]s and added per-breakpoint [`Override`]s and [`NodeKind::Nav`]. Version 4
-/// added reusable [`Component`]s. Older files still load: they get the default tokens, and their
-/// block list becomes the home page.
-pub const SCHEMA_VERSION: u32 = 4;
+/// added reusable [`Component`]s, and version 5 keyframe [`Animation`]s on blocks and shapes.
+/// Older files still load: they get the default tokens, and their block list becomes the home
+/// page.
+pub const SCHEMA_VERSION: u32 = 5;
 
 pub type NodeId = String;
 
@@ -240,6 +241,9 @@ pub struct Node {
     /// value instead of their own, as field name to prop name.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub bindings: BTreeMap<String, String>,
+    /// Played when the page loads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub animation: Option<Animation>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -290,6 +294,7 @@ impl Node {
             kind,
             responsive: BTreeMap::new(),
             bindings: BTreeMap::new(),
+            animation: None,
         }
     }
 
@@ -941,6 +946,250 @@ impl Node {
     }
 }
 
+css_enum!(Easing {
+    Linear => "linear", "linear",
+    Ease => "ease", "ease",
+    EaseIn => "ease-in", "ease-in",
+    EaseOut => "ease-out", "ease-out",
+    EaseInOut => "ease-in-out", "ease-in-out",
+});
+
+// `css_enum!` writes the enum, so the default can't be a derive attribute on it.
+#[allow(clippy::derivable_impls)]
+impl Default for Easing {
+    fn default() -> Self {
+        Easing::EaseOut
+    }
+}
+
+/// A keyframe animation of opacity and transform. Exports turn it into CSS `@keyframes`, so it
+/// plays in every target and in exported SVG files.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Animation {
+    /// In seconds.
+    pub duration: f64,
+    /// In seconds.
+    #[serde(default)]
+    pub delay: f64,
+    #[serde(default)]
+    pub easing: Easing,
+    /// How many times it plays; `0` loops forever.
+    #[serde(default = "one_u32")]
+    pub iterations: u32,
+    /// Play every other iteration backwards.
+    #[serde(default)]
+    pub alternate: bool,
+    /// Sorted by `at`.
+    pub keyframes: Vec<Keyframe>,
+}
+
+/// The state at one point of an [`Animation`].
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Keyframe {
+    /// Percent of the way through, 0 to 100.
+    pub at: f64,
+    #[serde(default = "one_f64")]
+    pub opacity: f64,
+    /// Offset in px.
+    #[serde(default)]
+    pub x: f64,
+    #[serde(default)]
+    pub y: f64,
+    #[serde(default = "one_f64")]
+    pub scale: f64,
+    /// In degrees.
+    #[serde(default)]
+    pub rotate: f64,
+}
+
+fn one_u32() -> u32 {
+    1
+}
+
+fn one_f64() -> f64 {
+    1.0
+}
+
+impl Keyframe {
+    /// No change from the element's own look, at `at` percent.
+    pub fn rest(at: f64) -> Self {
+        Self {
+            at,
+            opacity: 1.0,
+            x: 0.0,
+            y: 0.0,
+            scale: 1.0,
+            rotate: 0.0,
+        }
+    }
+
+    pub fn declarations(&self) -> Vec<(&'static str, String)> {
+        vec![
+            ("opacity", css::number(self.opacity.clamp(0.0, 1.0))),
+            (
+                "transform",
+                format!(
+                    "translate({}px, {}px) rotate({}deg) scale({})",
+                    css::number(self.x),
+                    css::number(self.y),
+                    css::number(self.rotate),
+                    css::number(self.scale)
+                ),
+            ),
+        ]
+    }
+}
+
+impl Animation {
+    /// Ready-made animations the editor offers, as (id, label).
+    pub const PRESETS: &'static [(&'static str, &'static str)] = &[
+        ("fade-in", "Fade in"),
+        ("slide-up", "Slide up"),
+        ("pop", "Pop in"),
+        ("spin", "Spin"),
+        ("pulse", "Pulse"),
+        ("float", "Float"),
+    ];
+
+    pub fn preset(id: &str) -> Option<Self> {
+        let k = Keyframe::rest;
+        let once = |duration, keyframes| Self {
+            duration,
+            delay: 0.0,
+            easing: Easing::EaseOut,
+            iterations: 1,
+            alternate: false,
+            keyframes,
+        };
+        Some(match id {
+            "fade-in" => once(
+                0.6,
+                vec![
+                    Keyframe {
+                        opacity: 0.0,
+                        ..k(0.0)
+                    },
+                    k(100.0),
+                ],
+            ),
+            "slide-up" => once(
+                0.6,
+                vec![
+                    Keyframe {
+                        opacity: 0.0,
+                        y: 24.0,
+                        ..k(0.0)
+                    },
+                    k(100.0),
+                ],
+            ),
+            "pop" => once(
+                0.5,
+                vec![
+                    Keyframe {
+                        opacity: 0.0,
+                        scale: 0.6,
+                        ..k(0.0)
+                    },
+                    Keyframe {
+                        scale: 1.08,
+                        ..k(70.0)
+                    },
+                    k(100.0),
+                ],
+            ),
+            "spin" => Self {
+                easing: Easing::Linear,
+                iterations: 0,
+                ..once(
+                    4.0,
+                    vec![
+                        k(0.0),
+                        Keyframe {
+                            rotate: 360.0,
+                            ..k(100.0)
+                        },
+                    ],
+                )
+            },
+            "pulse" => Self {
+                easing: Easing::EaseInOut,
+                iterations: 0,
+                alternate: true,
+                ..once(
+                    1.2,
+                    vec![
+                        k(0.0),
+                        Keyframe {
+                            scale: 1.08,
+                            ..k(100.0)
+                        },
+                    ],
+                )
+            },
+            "float" => Self {
+                easing: Easing::EaseInOut,
+                iterations: 0,
+                alternate: true,
+                ..once(
+                    2.0,
+                    vec![
+                        k(0.0),
+                        Keyframe {
+                            y: -12.0,
+                            ..k(100.0)
+                        },
+                    ],
+                )
+            },
+            _ => return None,
+        })
+    }
+
+    /// The `@keyframes` body: one (stop, declarations) pair per keyframe, such as `"50%"`.
+    pub fn keyframe_rules(&self) -> Vec<(String, Vec<(&'static str, String)>)> {
+        let mut keyframes = self.keyframes.clone();
+        keyframes.sort_by(|a, b| a.at.total_cmp(&b.at));
+        keyframes
+            .iter()
+            .map(|k| {
+                (
+                    format!("{}%", css::number(k.at.clamp(0.0, 100.0))),
+                    k.declarations(),
+                )
+            })
+            .collect()
+    }
+
+    /// The declarations that play `@keyframes name` on an element. Shapes in an SVG pivot on
+    /// their own center rather than the drawing's origin.
+    pub fn declarations(&self, name: &str, svg_shape: bool) -> Vec<(&'static str, String)> {
+        let iterations = match self.iterations {
+            0 => "infinite".to_owned(),
+            n => n.to_string(),
+        };
+        let direction = if self.alternate {
+            "alternate"
+        } else {
+            "normal"
+        };
+        let mut out = vec![(
+            "animation",
+            format!(
+                "{name} {}s {} {}s {iterations} {direction} both",
+                css::number(self.duration.max(0.01)),
+                self.easing.as_css(),
+                css::number(self.delay.max(0.0)),
+            ),
+        )];
+        if svg_shape {
+            out.push(("transform-box", "fill-box".to_owned()));
+            out.push(("transform-origin", "center".to_owned()));
+        }
+        out
+    }
+}
+
 /// CSS spelling shared by the editor canvas and the exporters.
 pub mod css {
     use super::parse_token_ref;
@@ -1022,6 +1271,20 @@ pub struct Shape {
     pub style: ShapeStyle,
     #[serde(flatten)]
     pub geometry: Geometry,
+    /// Played when the drawing is shown. Transforms pivot on the shape's own center.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub animation: Option<Animation>,
+}
+
+impl Shape {
+    pub fn new(id: impl Into<NodeId>, style: ShapeStyle, geometry: Geometry) -> Self {
+        Self {
+            id: id.into(),
+            style,
+            geometry,
+            animation: None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1044,10 +1307,32 @@ impl Default for ShapeStyle {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum Geometry {
-    Rect { x: f64, y: f64, w: f64, h: f64 },
-    Ellipse { cx: f64, cy: f64, rx: f64, ry: f64 },
-    Line { x1: f64, y1: f64, x2: f64, y2: f64 },
-    Path { nodes: Vec<PathNode>, closed: bool },
+    Rect {
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+    },
+    Ellipse {
+        cx: f64,
+        cy: f64,
+        rx: f64,
+        ry: f64,
+    },
+    Line {
+        x1: f64,
+        y1: f64,
+        x2: f64,
+        y2: f64,
+    },
+    Path {
+        nodes: Vec<PathNode>,
+        closed: bool,
+        /// Further closed outlines of the same shape, such as the hole in a ring. Filled with
+        /// the even-odd rule.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        subpaths: Vec<Vec<PathNode>>,
+    },
 }
 
 impl Geometry {
@@ -1056,7 +1341,9 @@ impl Geometry {
         match self {
             Geometry::Rect { .. } | Geometry::Ellipse { .. } => true,
             Geometry::Line { .. } => false,
-            Geometry::Path { closed, .. } => *closed,
+            Geometry::Path {
+                closed, subpaths, ..
+            } => *closed || !subpaths.is_empty(),
         }
     }
 }
@@ -1103,6 +1390,7 @@ mod tests {
                 },
                 responsive: BTreeMap::new(),
                 bindings: BTreeMap::new(),
+                animation: None,
             },
             Node {
                 id: "v".into(),
@@ -1126,12 +1414,15 @@ mod tests {
                                     },
                                 ],
                                 closed: false,
+                                subpaths: vec![],
                             },
+                            animation: Animation::preset("spin"),
                         }],
                     },
                 },
                 responsive: BTreeMap::new(),
                 bindings: BTreeMap::new(),
+                animation: None,
             },
             Node {
                 id: "row".into(),
@@ -1148,6 +1439,7 @@ mod tests {
                         kind: NodeKind::Text { text: "in".into() },
                         responsive: BTreeMap::new(),
                         bindings: BTreeMap::new(),
+                        animation: None,
                     }],
                 },
                 responsive: BTreeMap::from([(
@@ -1159,6 +1451,7 @@ mod tests {
                     },
                 )]),
                 bindings: BTreeMap::new(),
+                animation: Animation::preset("pop"),
             },
         ];
         doc.pages.push(Page {
@@ -1282,6 +1575,43 @@ mod tests {
         let json = serde_json::to_value(&node).unwrap();
         assert_eq!(json["responsive"]["tablet"]["columns"], 2);
         assert!(json["responsive"]["tablet"].get("hidden").is_none());
+    }
+
+    #[test]
+    fn animations_lower_to_keyframes_and_a_shorthand() {
+        let mut a = Animation::preset("pop").unwrap();
+        a.keyframes.reverse();
+        let rules = a.keyframe_rules();
+        assert_eq!(rules[0].0, "0%");
+        assert_eq!(
+            rules[0].1,
+            [
+                ("opacity", "0".to_owned()),
+                (
+                    "transform",
+                    "translate(0px, 0px) rotate(0deg) scale(0.6)".to_owned()
+                )
+            ]
+        );
+        assert_eq!(rules[1].0, "70%");
+        assert_eq!(
+            Animation::preset("spin")
+                .unwrap()
+                .declarations("spin-1", true),
+            [
+                (
+                    "animation",
+                    "spin-1 4s linear 0s infinite normal both".to_owned()
+                ),
+                ("transform-box", "fill-box".to_owned()),
+                ("transform-origin", "center".to_owned())
+            ]
+        );
+        for (id, _) in Animation::PRESETS {
+            assert!(Animation::preset(id).is_some(), "{id}");
+        }
+        let json: Keyframe = serde_json::from_str(r#"{"at":50}"#).unwrap();
+        assert_eq!(json, Keyframe::rest(50.0));
     }
 
     #[test]

@@ -1,5 +1,5 @@
 {
-  "version": 4,
+  "version": 5,
   "title": "Alpaca & Co",
   "pages": [
     {
@@ -33,6 +33,31 @@
             "background": null,
             "padding": "{lg}",
             "font": "display"
+          },
+          "animation": {
+            "duration": 0.6,
+            "delay": 0.1,
+            "easing": "ease-out",
+            "iterations": 1,
+            "alternate": false,
+            "keyframes": [
+              {
+                "at": 0,
+                "opacity": 0,
+                "x": 0,
+                "y": 24,
+                "scale": 1,
+                "rotate": 0
+              },
+              {
+                "at": 100,
+                "opacity": 1,
+                "x": 0,
+                "y": 0,
+                "scale": 1,
+                "rotate": 0
+              }
+            ]
           }
         },
         {
@@ -104,6 +129,20 @@
                   "fill": "#7c5cff",
                   "stroke": "#1f1b2e",
                   "stroke_width": 2
+                },
+                "animation": {
+                  "duration": 4,
+                  "easing": "linear",
+                  "iterations": 0,
+                  "keyframes": [
+                    {
+                      "at": 0
+                    },
+                    {
+                      "at": 100,
+                      "rotate": 360
+                    }
+                  ]
                 }
               },
               {

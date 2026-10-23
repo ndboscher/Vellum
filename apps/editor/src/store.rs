@@ -38,6 +38,8 @@ pub struct Store {
     /// The viewport the canvas previews, `None` for desktop. Responsive controls edit its
     /// overrides.
     pub breakpoint: RwSignal<Option<Breakpoint>>,
+    /// Bumped to replay the page canvas's animations.
+    pub animation_generation: RwSignal<u32>,
 }
 
 impl Store {
@@ -57,6 +59,7 @@ impl Store {
             page: RwSignal::new("home".into()),
             back_to: RwSignal::new("home".into()),
             breakpoint: RwSignal::new(None),
+            animation_generation: RwSignal::new(0),
         }
     }
 

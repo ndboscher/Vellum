@@ -13,6 +13,7 @@ use vellum_schema::{
     Length, Node, NodeId, NodeKind, TokenKind,
 };
 
+use crate::animate::{page_keyframes, play_style};
 use crate::shapes::shape_view;
 use crate::site::{
     binding_fields, instance_fields, override_fields, preview_width, BreakpointBar,
@@ -247,6 +248,13 @@ pub fn PageEditor() -> impl IntoView {
                 <div class="stage-inner">
                 <ComponentBanner selected=c.selected />
                 <BreakpointBar />
+                <style>
+                    {move || {
+                        store.page.track();
+                        let generation = store.animation_generation.get();
+                        store.doc.with(|d| page_keyframes(d, store.nodes(d), generation))
+                    }}
+                </style>
                 <div class="page" class:dark=move || store.dark_preview.get() style=page_vars on:dragover=over_empty>
                     {move || {
                         store.page.track();
@@ -258,6 +266,7 @@ pub fn PageEditor() -> impl IntoView {
                     {move || {
                         store.page.track();
                         store.breakpoint.track();
+                        store.animation_generation.track();
                         let nodes = store.doc.with(|d| store.nodes(d).clone());
                         block_list(c, None, false, nodes)
                     }}
@@ -391,7 +400,11 @@ fn block_view(c: Canvas, node: &Node, interactive: bool) -> AnyView {
     // What the block looks like at the previewed breakpoint.
     let o = node.override_at(c.store.breakpoint.get_untracked());
     let s = &o.apply_style(&node.style);
-    let style = inline_style(s.declarations());
+    let mut style = inline_style(s.declarations());
+    if let Some(a) = &node.animation {
+        let generation = c.store.animation_generation.get_untracked();
+        style = format!("{style};{}", play_style(&node.id, a, generation, false));
+    }
     match &node.kind {
         NodeKind::Heading { text, level } => {
             let text = text.clone();
@@ -420,7 +433,15 @@ fn block_view(c: Canvas, node: &Node, interactive: bool) -> AnyView {
             view! { <div class="blk-spacer" style=style></div> }.into_any()
         }
         NodeKind::Svg { drawing } => {
-            let shapes = drawing.shapes.iter().map(|sh| shape_view(sh, false)).collect_view();
+            let generation = c.store.animation_generation.get_untracked();
+            let shapes = drawing
+                .shapes
+                .iter()
+                .map(|sh| {
+                    let play = sh.animation.as_ref().map(|a| play_style(&sh.id, a, generation, true));
+                    shape_view(sh, false, play)
+                })
+                .collect_view();
             view! {
                 <div style=style>
                     <svg
@@ -997,6 +1018,7 @@ fn Inspector(selected: RwSignal<Option<NodeId>>) -> impl IntoView {
                 {binding_fields(store, id.clone())}
                 {text_style}
                 {(!is_instance).then(|| color_field(store, id.clone(), "Background", true, |n| n.style.background.clone(), |n, v| n.style.background = v))}
+                {(!is_instance).then(|| animation_field(store, id.clone()))}
                 {(!is_instance).then(|| {
                     let id = id.clone();
                     let make = move |_| {
@@ -1040,4 +1062,76 @@ fn Inspector(selected: RwSignal<Option<NodeId>>) -> impl IntoView {
         }
         .into_any()
     }
+}
+
+/// A block's entrance animation: a preset and its timing. Shapes get the full keyframe
+/// timeline in the vector canvas.
+fn animation_field(store: Store, id: NodeId) -> AnyView {
+    use vellum_schema::Animation;
+    let id_value = id.clone();
+    let preset = move || {
+        read(store, &id_value, |n| {
+            n.animation.as_ref().map(|a| {
+                Animation::PRESETS
+                    .iter()
+                    .find(|(p, _)| {
+                        Animation::preset(p).is_some_and(|base| base.keyframes == a.keyframes)
+                    })
+                    .map_or("custom", |(p, _)| p)
+                    .to_owned()
+            })
+        })
+        .unwrap_or_default()
+    };
+    let id_pick = id.clone();
+    let on_pick = move |ev| {
+        let v = event_target_value(&ev);
+        commit(store, &id_pick, |n| n.animation = Animation::preset(&v));
+        store.animation_generation.update(|g| *g += 1);
+    };
+    let timing = |label: &'static str,
+                  max: f64,
+                  get: fn(&Animation) -> f64,
+                  set: fn(&mut Animation, f64)| {
+        let (id_read, id_write) = (id.clone(), id.clone());
+        let id_shown = id.clone();
+        view! {
+            <label class="field" class:hidden=move || read(store, &id_shown, |n| n.animation.is_none())>
+                <span>{label} " (" {move || read(store, &id_read, |n| n.animation.as_ref().map(|a| css::number(get(a))))} "s)"</span>
+                <input
+                    type="range"
+                    min="0"
+                    max=max
+                    step="0.1"
+                    prop:value=move || read(store, &id_write.clone(), |n| n.animation.as_ref().map(get)).unwrap_or_default()
+                    on:pointerdown=move |_| store.begin_edit()
+                    on:input={
+                        let id = id.clone();
+                        move |ev| {
+                            let v: f64 = event_target_value(&ev).parse().unwrap_or(0.0);
+                            edit(store, &id, |n| {
+                                if let Some(a) = &mut n.animation {
+                                    set(a, v);
+                                }
+                            });
+                        }
+                    }
+                    on:change=move |_| store.animation_generation.update(|g| *g += 1)
+                />
+            </label>
+        }
+    };
+    view! {
+        <label class="field">
+            <span>"Animation"</span>
+            <select prop:value=preset on:change=on_pick>
+                <option value="">"None"</option>
+                {Animation::PRESETS.iter().map(|&(p, l)| view! { <option value=p>{l}</option> }).collect_view()}
+                <option value="custom" disabled=true>"Custom"</option>
+            </select>
+        </label>
+        {timing("Duration", 5.0, |a| a.duration, |a, v| a.duration = v.max(0.1))}
+        {timing("Delay", 3.0, |a| a.delay, |a, v| a.delay = v)}
+    }
+    .into_any()
 }

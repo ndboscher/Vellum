@@ -14,10 +14,10 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use vellum_schema::{
-    css, Breakpoint, Component, Document, Drawing, Geometry, Node, NodeKind, Page, PropKind, Shape,
-    Style,
+    css, Animation, Breakpoint, Component, Document, Drawing, Geometry, Node, NodeKind, Page,
+    PropKind, Shape, Style,
 };
-use vellum_vector::path_data;
+use vellum_vector::geometry_path_data;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum OutputNode {
@@ -236,6 +236,8 @@ pub fn lower_site(doc: &Document, links: PageLinks) -> LoweredSite {
         namer: ClassNamer::default(),
         rules,
         responsive: Breakpoint::ALL.iter().map(|_| Vec::new()).collect(),
+        keyframes: Vec::new(),
+        animated: Vec::new(),
     };
     let pages = doc
         .pages
@@ -276,9 +278,19 @@ pub fn lower_site(doc: &Document, links: PageLinks) -> LoweredSite {
     let Lowering {
         mut rules,
         responsive,
+        keyframes,
+        animated,
         ..
     } = cx;
     rules.extend(responsive.into_iter().flatten());
+    rules.extend(keyframes);
+    if !animated.is_empty() {
+        rules.push(CssRule {
+            media: Some("@media (prefers-reduced-motion: reduce)".into()),
+            selector: animated.join(",\n"),
+            declarations: vec![("animation".into(), "none".into())],
+        });
+    }
     LoweredSite {
         pages,
         components,
@@ -366,9 +378,41 @@ struct Lowering<'a> {
     rules: Vec<CssRule>,
     /// Override rules for each of [`Breakpoint::ALL`], appended after the base rules.
     responsive: Vec<Vec<CssRule>>,
+    /// `@keyframes` for every animation, appended last.
+    keyframes: Vec<CssRule>,
+    /// Selectors of animated elements, which stop under `prefers-reduced-motion`.
+    animated: Vec<String>,
 }
 
 impl Lowering<'_> {
+    /// Plays `animation` on `selector`: returns the declarations to add to its rule, and records
+    /// the `@keyframes`.
+    fn animate(
+        &mut self,
+        class_name: &str,
+        animation: &Animation,
+        svg_shape: bool,
+    ) -> Vec<(String, String)> {
+        let name = format!("{class_name}-anim");
+        self.keyframes
+            .extend(animation.keyframe_rules().into_iter().map(|(stop, decls)| {
+                CssRule {
+                    media: Some(format!("@keyframes {name}")),
+                    selector: stop,
+                    declarations: decls
+                        .into_iter()
+                        .filter_map(|(p, v)| declaration(p, v))
+                        .collect(),
+                }
+            }));
+        self.animated.push(format!(".{class_name}"));
+        animation
+            .declarations(&name, svg_shape)
+            .into_iter()
+            .filter_map(|(p, v)| declaration(p, v))
+            .collect()
+    }
+
     /// The class for `key`, and whether it was just made.
     fn class_for(&mut self, key: (String, String), label: &str) -> (String, bool) {
         if let Some(name) = self.classes.get(&key) {
@@ -485,7 +529,7 @@ fn lower_node(node: &Node, cx: &mut Lowering) -> OutputNode {
             vec![("aria-hidden", "true".into())],
             vec![],
         ),
-        NodeKind::Svg { drawing } => wrap(lower_drawing(drawing)),
+        NodeKind::Svg { drawing } => wrap(lower_drawing(drawing, &node.id, cx)),
         NodeKind::Container { children, .. } => {
             let children = children.iter().map(|child| lower_node(child, cx)).collect();
             block("div", "blk-container", vec![], children)
@@ -540,10 +584,14 @@ fn push_rules(node: &Node, class_name: &str, cx: &mut Lowering) {
         }
         _ => block_declarations(&node.style),
     };
+    let mut declarations: Vec<_> = declarations.into_iter().flatten().collect();
+    if let Some(animation) = &node.animation {
+        declarations.extend(cx.animate(class_name, animation, false));
+    }
     cx.rules.push(CssRule {
         media: None,
         selector: format!(".{class_name}"),
-        declarations: declarations.into_iter().flatten().collect(),
+        declarations,
     });
     for (bp, rules) in Breakpoint::ALL.iter().zip(&mut cx.responsive) {
         let Some(o) = node.responsive.get(bp) else {
@@ -578,7 +626,9 @@ fn declaration(property: &str, value: String) -> Option<(String, String)> {
     (!unsafe_value).then(|| (property.to_owned(), value))
 }
 
-fn lower_drawing(drawing: &Drawing) -> Element {
+/// An inline SVG. Animated shapes get a class (shared across instances, like node classes)
+/// carrying their animation.
+fn lower_drawing(drawing: &Drawing, node_id: &str, cx: &mut Lowering) -> Element {
     element(
         "svg",
         vec![
@@ -594,7 +644,23 @@ fn lower_drawing(drawing: &Drawing) -> Element {
         drawing
             .shapes
             .iter()
-            .map(|shape| OutputNode::Element(lower_shape(shape)))
+            .map(|shape| {
+                let mut el = lower_shape(shape);
+                if let Some(animation) = &shape.animation {
+                    let key = (cx.tree.clone(), format!("{node_id}/{}", shape.id));
+                    let (class_name, fresh) = cx.class_for(key, "shape");
+                    if fresh {
+                        let declarations = cx.animate(&class_name, animation, true);
+                        cx.rules.push(CssRule {
+                            media: None,
+                            selector: format!(".{class_name}"),
+                            declarations,
+                        });
+                    }
+                    el.attrs.insert(0, ("class", class_name));
+                }
+                OutputNode::Element(el)
+            })
             .collect(),
     )
 }
@@ -638,7 +704,13 @@ fn lower_shape(shape: &Shape) -> Element {
                 ("y2", fmt(*y2)),
             ],
         ),
-        Geometry::Path { nodes, closed } => ("path", vec![("d", path_data(nodes, *closed))]),
+        Geometry::Path { subpaths, .. } => {
+            let mut attrs = vec![("d", geometry_path_data(&shape.geometry))];
+            if !subpaths.is_empty() {
+                attrs.push(("fill-rule", "evenodd".into()));
+            }
+            ("path", attrs)
+        }
     };
     attrs.extend(paint);
     match shape.geometry {

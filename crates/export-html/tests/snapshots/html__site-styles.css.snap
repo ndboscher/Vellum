@@ -108,6 +108,7 @@ body {
   color: var(--color-text);
   padding: var(--space-lg);
   font: var(--font-display);
+  animation: heading-anim 0.6s ease-out 0.1s 1 normal both;
 }
 
 .text {
@@ -138,6 +139,12 @@ body {
   text-align: center;
   color: #1f1b2e;
   padding: 16px;
+}
+
+.shape {
+  animation: shape-anim 4s linear 0s infinite normal both;
+  transform-box: fill-box;
+  transform-origin: center;
 }
 
 .grid {
@@ -264,5 +271,36 @@ body {
 
   .grid-2 {
     grid-template-columns: repeat(1, minmax(0, 1fr));
+  }
+}
+
+@keyframes heading-anim {
+  0% {
+    opacity: 0;
+    transform: translate(0px, 24px) rotate(0deg) scale(1);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translate(0px, 0px) rotate(0deg) scale(1);
+  }
+}
+
+@keyframes shape-anim {
+  0% {
+    opacity: 1;
+    transform: translate(0px, 0px) rotate(0deg) scale(1);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translate(0px, 0px) rotate(360deg) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .heading,
+  .shape {
+    animation: none;
   }
 }

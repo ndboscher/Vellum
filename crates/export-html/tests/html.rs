@@ -107,3 +107,15 @@ fn emits_breakpoint_overrides_as_media_queries() {
     assert!(css.contains("@media (max-width: 900px) {\n  .grid {\n    grid-template-columns: repeat(2, minmax(0, 1fr));"));
     assert!(css.contains("  }\n\n  .spacer {\n    display: none;\n  }\n"));
 }
+
+#[test]
+fn animations_export_as_keyframes() {
+    let result = export_html(&site(), &HtmlOptions::default());
+    let css = &result.file("styles.css").unwrap().contents;
+    let home = &result.file("index.html").unwrap().contents;
+    assert!(css.contains("  animation: heading-anim 0.6s ease-out 0.1s 1 normal both;"));
+    assert!(css.contains("@keyframes heading-anim {\n  0% {\n    opacity: 0;\n    transform: translate(0px, 24px) rotate(0deg) scale(1);"));
+    assert!(css.contains(".shape {\n  animation: shape-anim 4s linear 0s infinite normal both;\n  transform-box: fill-box;"));
+    assert!(css.ends_with("@media (prefers-reduced-motion: reduce) {\n  .heading,\n  .shape {\n    animation: none;\n  }\n}\n"));
+    assert!(home.contains(r#"<rect class="shape" "#));
+}

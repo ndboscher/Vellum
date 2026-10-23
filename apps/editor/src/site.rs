@@ -555,9 +555,22 @@ pub fn BreakpointBar() -> impl IntoView {
         })
         .collect_view();
     view! {
-        <div class="breakpoints tabs">
-            {option(None, "Desktop", "Base styles, used at every width".into())}
-            {options}
+        <div class="row">
+            <div class="breakpoints tabs">
+                {option(None, "Desktop", "Base styles, used at every width".into())}
+                {options}
+            </div>
+            <button
+                type="button"
+                class="ghost"
+                title="Play the page's animations again"
+                on:click=move |ev| {
+                    ev.stop_propagation();
+                    store.animation_generation.update(|g| *g += 1);
+                }
+            >
+                "▶ Replay"
+            </button>
         </div>
     }
 }

@@ -26,6 +26,8 @@ features = [
   "DomRect",
   "DragEvent",
   "Element",
+  "File",
+  "FileList",
   "Headers",
   "HtmlAnchorElement",
   "HtmlInputElement",

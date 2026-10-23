@@ -7,10 +7,14 @@ use web_sys::{Element, PointerEvent};
 
 use vellum_core::{find, insert};
 use vellum_schema::{Geometry, Node, NodeKind, PathNode, Point, Shape, ShapeStyle};
+use vellum_vector::boolean::{combine, BooleanOp};
+use vellum_vector::import::import_svg;
 use vellum_vector::{
     drawing_to_svg, ellipse_from_drag, is_meaningful, line_from_drag, path_data, pull_handles,
     rect_from_drag, translate,
 };
+
+use crate::animate::{drawing_keyframes, play_style, scrub_style, shape_animation_panel};
 
 use crate::shapes::shape_view;
 use crate::store::{is_typing, new_id, use_store, Store, View};
@@ -53,6 +57,18 @@ pub fn VectorCanvas() -> impl IntoView {
     let tool = RwSignal::new(Tool::Pen);
     let style = RwSignal::new(ShapeStyle::default());
     let selected = RwSignal::new(None::<String>);
+    // Further shapes picked with Shift, for boolean operations.
+    let also = RwSignal::new(Vec::<String>::new());
+    // Animation preview: everything plays after a replay; otherwise the selected shape can be
+    // frozen at a point of its timeline.
+    let playing = RwSignal::new(false);
+    let generation = RwSignal::new(0u32);
+    let scrub = RwSignal::new(None::<f64>);
+    let replay = move || {
+        generation.update(|g| *g += 1);
+        playing.set(true);
+    };
+    let import_error = RwSignal::new(None::<String>);
     let draft = RwSignal::new(None::<Shape>);
     let pen = RwSignal::new(Vec::<PathNode>::new());
     let cursor = RwSignal::new(None::<Point>);
@@ -80,19 +96,17 @@ pub fn VectorCanvas() -> impl IntoView {
 
     let add_shape = move |geometry: Geometry| {
         let style = style.get_untracked();
-        drawing.update(|d| {
-            d.shapes.push(Shape {
-                id: new_id(),
-                style,
-                geometry,
-            })
-        });
+        drawing.update(|d| d.shapes.push(Shape::new(new_id(), style, geometry)));
     };
 
     let finish_pen = move |closed: bool| {
         let nodes = pen.get_untracked();
         if nodes.len() >= 2 {
-            add_shape(Geometry::Path { nodes, closed });
+            add_shape(Geometry::Path {
+                nodes,
+                closed,
+                subpaths: Vec::new(),
+            });
         }
         pen.set(Vec::new());
     };
@@ -104,13 +118,16 @@ pub fn VectorCanvas() -> impl IntoView {
         tool.set(next);
         if next != Tool::Select {
             selected.set(None);
+            also.set(Vec::new());
         }
     };
 
     let delete_selected = move || {
         if let Some(id) = selected.get_untracked() {
-            drawing.update(|d| d.shapes.retain(|s| s.id != id));
+            let extra = also.get_untracked();
+            drawing.update(|d| d.shapes.retain(|s| s.id != id && !extra.contains(&s.id)));
             selected.set(None);
+            also.set(Vec::new());
         }
     };
 
@@ -158,11 +175,33 @@ pub fn VectorCanvas() -> impl IntoView {
             let _ = el.set_pointer_capture(ev.pointer_id());
         }
 
+        playing.set(false);
         match tool.get_untracked() {
             Tool::Select => {
                 let shape = hit.and_then(|id| {
                     drawing.with_untracked(|d| d.shapes.iter().find(|s| s.id == id).cloned())
                 });
+                if ev.shift_key() {
+                    // Shift-click adds a shape to (or takes it out of) the selection.
+                    if let Some(s) = shape {
+                        match selected.get_untracked() {
+                            None => selected.set(Some(s.id)),
+                            Some(first) if first == s.id => {}
+                            Some(_) => also.update(|a| {
+                                if let Some(i) = a.iter().position(|x| *x == s.id) {
+                                    a.remove(i);
+                                } else {
+                                    a.push(s.id);
+                                }
+                            }),
+                        }
+                    }
+                    return;
+                }
+                if shape.as_ref().map(|s| &s.id) != selected.get_untracked().as_ref() {
+                    scrub.set(None);
+                }
+                also.set(Vec::new());
                 selected.set(shape.as_ref().map(|s| s.id.clone()));
                 gesture.set_value(shape.map(|s| Gesture::Move {
                     id: s.id,
@@ -214,11 +253,7 @@ pub fn VectorCanvas() -> impl IntoView {
                     Tool::Ellipse => ellipse_from_drag(start, p),
                     _ => line_from_drag(start, p),
                 };
-                draft.set(Some(Shape {
-                    id: "draft".into(),
-                    style: style.get_untracked(),
-                    geometry,
-                }));
+                draft.set(Some(Shape::new("draft", style.get_untracked(), geometry)));
             }
             None => {}
         }
@@ -347,17 +382,119 @@ pub fn VectorCanvas() -> impl IntoView {
     };
 
     let selection_outline = move || {
-        selected_shape().map(|s| {
-            let outline = Shape {
-                style: ShapeStyle {
-                    fill: "none".into(),
-                    stroke: "#2f80ff".into(),
-                    stroke_width: 1.5,
-                },
-                ..s
-            };
-            view! { <g class="selection" pointer-events="none">{shape_view(&outline, false)}</g> }
+        let ids: Vec<String> = selected.get().into_iter().chain(also.get()).collect();
+        drawing.with(|d| {
+            d.shapes
+                .iter()
+                .filter(|s| ids.contains(&s.id))
+                .map(|s| {
+                    let outline = Shape {
+                        style: ShapeStyle {
+                            fill: "none".into(),
+                            stroke: "#2f80ff".into(),
+                            stroke_width: 1.5,
+                        },
+                        animation: None,
+                        ..s.clone()
+                    };
+                    view! { <g class="selection" pointer-events="none">{shape_view(&outline, false, None)}</g> }
+                })
+                .collect_view()
         })
+    };
+
+    // Inline style for a shape on the canvas: playing, frozen at the scrubber, or still.
+    let shape_style = move |s: &Shape| -> Option<String> {
+        let a = s.animation.as_ref()?;
+        if playing.get() {
+            return Some(play_style(&s.id, a, generation.get(), true));
+        }
+        let at = scrub.get()?;
+        (selected.get().as_deref() == Some(s.id.as_str()))
+            .then(|| scrub_style(&s.id, a, generation.get(), at))
+    };
+
+    // Combines the selected shapes (in drawing order) into one, in the bottom shape's place
+    // and style.
+    let apply_boolean = move |op: BooleanOp| {
+        let ids: Vec<String> = selected
+            .get_untracked()
+            .into_iter()
+            .chain(also.get_untracked())
+            .collect();
+        let mut result = None;
+        drawing.update(|d| {
+            let picked: Vec<&Shape> = d.shapes.iter().filter(|s| ids.contains(&s.id)).collect();
+            let Some(geometry) = combine(&picked, op) else {
+                return;
+            };
+            let bottom = d
+                .shapes
+                .iter()
+                .position(|s| ids.contains(&s.id))
+                .expect("picked");
+            let shape = Shape::new(new_id(), d.shapes[bottom].style.clone(), geometry);
+            result = Some(shape.id.clone());
+            d.shapes.insert(bottom, shape);
+            d.shapes.retain(|s| !ids.contains(&s.id));
+        });
+        if result.is_some() {
+            selected.set(result);
+            also.set(Vec::new());
+        }
+    };
+    let boolean_ok = move || {
+        let ids: Vec<String> = selected.get().into_iter().chain(also.get()).collect();
+        ids.len() >= 2
+            && drawing.with(|d| {
+                d.shapes
+                    .iter()
+                    .filter(|s| ids.contains(&s.id))
+                    .all(|s| s.geometry.is_filled())
+            })
+    };
+    let boolean_buttons = BooleanOp::ALL
+        .iter()
+        .map(|&op| {
+            view! {
+                <button type="button" disabled=move || !boolean_ok() on:click=move |_| apply_boolean(op)>
+                    {op.label()}
+                </button>
+            }
+        })
+        .collect_view();
+
+    let on_import = move |ev: leptos::ev::Event| {
+        let Some(input) = ev
+            .target()
+            .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+        else {
+            return;
+        };
+        let Some(file) = input.files().and_then(|f| f.get(0)) else {
+            return;
+        };
+        input.set_value("");
+        leptos::task::spawn_local(async move {
+            let text = wasm_bindgen_futures::JsFuture::from(file.text())
+                .await
+                .ok()
+                .and_then(|v| v.as_string())
+                .unwrap_or_default();
+            match import_svg(&text, new_id) {
+                Ok(imported) => {
+                    import_error.set(None);
+                    drawing.update(|d| {
+                        if d.shapes.is_empty() {
+                            d.width = imported.width;
+                            d.height = imported.height;
+                        }
+                        d.shapes.extend(imported.shapes);
+                    });
+                }
+                Err(e) => import_error.set(Some(format!("Couldn't import: {e}"))),
+            }
+        });
     };
 
     view! {
@@ -369,6 +506,7 @@ pub fn VectorCanvas() -> impl IntoView {
             </aside>
 
             <main class="stage">
+                <style>{move || drawing.with(|d| drawing_keyframes(d, generation.get()))}</style>
                 <svg
                     node_ref=svg_ref
                     class=move || {
@@ -390,8 +528,8 @@ pub fn VectorCanvas() -> impl IntoView {
                         height=move || drawing.with(|d| d.height)
                         fill="#fff"
                     />
-                    {move || drawing.with(|d| d.shapes.iter().map(|s| shape_view(s, true)).collect_view())}
-                    {move || draft.with(|d| d.as_ref().map(|s| shape_view(s, false)))}
+                    {move || drawing.with(|d| d.shapes.iter().map(|s| shape_view(s, true, shape_style(s))).collect_view())}
+                    {move || draft.with(|d| d.as_ref().map(|s| shape_view(s, false, None)))}
                     {selection_outline}
                     {pen_preview}
                 </svg>
@@ -436,9 +574,17 @@ pub fn VectorCanvas() -> impl IntoView {
                 </label>
                 <Show when=move || selected.get().is_some()>
                     <button type="button" class="danger" on:click=move |_| delete_selected()>
-                        "Delete shape"
+                        {move || if also.with(Vec::is_empty) { "Delete shape" } else { "Delete shapes" }}
                     </button>
                 </Show>
+                <hr />
+                <h3>"Combine"</h3>
+                <p class="hint">"Shift-click shapes to select several, then combine them into one path."</p>
+                <div class="boolean-ops">{boolean_buttons}</div>
+                {move || {
+                    let id = selected.get().filter(|_| also.with(Vec::is_empty))?;
+                    Some(view! { <hr /> {shape_animation_panel(drawing, id, scrub, replay)} })
+                }}
                 <hr />
                 <button
                     type="button"
@@ -450,6 +596,18 @@ pub fn VectorCanvas() -> impl IntoView {
                 </button>
                 <button type="button" disabled=move || drawing.with(|d| d.shapes.is_empty()) on:click=export_svg>
                     "Export SVG"
+                </button>
+                <label class="button-like" title="Add the shapes from an SVG file">
+                    "Import SVG…"
+                    <input type="file" accept=".svg,image/svg+xml" class="hidden" on:change=on_import />
+                </label>
+                {move || import_error.get().map(|e| view! { <p class="hint error">{e}</p> })}
+                <button
+                    type="button"
+                    disabled=move || !drawing.with(|d| d.shapes.iter().any(|s| s.animation.is_some()))
+                    on:click=move |_| replay()
+                >
+                    "▶ Play all animations"
                 </button>
                 <Show when=move || store.editing_node.get().is_some()>
                     <button type="button" class="ghost" on:click=move |_| store.editing_node.set(None)>
