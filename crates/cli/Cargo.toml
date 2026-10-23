@@ -15,6 +15,7 @@ vellum-schema.workspace = true
 vellum-export-core.workspace = true
 vellum-export-html.workspace = true
 vellum-export-react.workspace = true
+vellum-export-vue.workspace = true
 serde_json.workspace = true
 clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

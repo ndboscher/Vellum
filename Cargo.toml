@@ -7,6 +7,7 @@ members = [
     "crates/export-core",
     "crates/export-html",
     "crates/export-react",
+    "crates/export-vue",
     "crates/cli",
     "apps/editor",
     "apps/server",
@@ -25,6 +26,7 @@ vellum-core = { path = "crates/core" }
 vellum-export-core = { path = "crates/export-core" }
 vellum-export-html = { path = "crates/export-html" }
 vellum-export-react = { path = "crates/export-react" }
+vellum-export-vue = { path = "crates/export-vue" }
 vellum-server = { path = "apps/server" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

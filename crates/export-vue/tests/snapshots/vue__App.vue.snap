@@ -1,0 +1,20 @@
+---
+source: crates/export-vue/tests/vue.rs
+expression: "result.file(\"src/App.vue\").unwrap().contents"
+---
+<script setup>
+import "./styles.css";
+import Home from "./pages/Home.vue";
+import PricingPlans from "./pages/PricingPlans.vue";
+
+const routes = {
+  "/": Home,
+  "/pricing": PricingPlans,
+};
+const path = window.location.pathname.replace(/\/+$/, "") || "/";
+const page = routes[path] ?? Home;
+</script>
+
+<template>
+  <component :is="page" />
+</template>

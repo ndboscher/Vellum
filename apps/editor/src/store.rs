@@ -2,7 +2,7 @@
 
 use leptos::prelude::*;
 use vellum_core::History;
-use vellum_schema::{Document, Drawing, NodeId};
+use vellum_schema::{Breakpoint, Document, Drawing, Node, NodeId};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum View {
@@ -30,6 +30,16 @@ pub struct Store {
     pub drawing: RwSignal<Drawing>,
     /// The page block the open drawing belongs to, if it was opened from one.
     pub editing_node: RwSignal<Option<NodeId>>,
+    /// The page or component open in the page editor. If it disappears (say, on undo) the
+    /// home page shows.
+    pub page: RwSignal<NodeId>,
+    /// The page to go back to when done editing a component.
+    pub back_to: RwSignal<NodeId>,
+    /// The viewport the canvas previews, `None` for desktop. Responsive controls edit its
+    /// overrides.
+    pub breakpoint: RwSignal<Option<Breakpoint>>,
+    /// Bumped to replay the page canvas's animations.
+    pub animation_generation: RwSignal<u32>,
 }
 
 impl Store {
@@ -46,7 +56,57 @@ impl Store {
             dark_preview: RwSignal::new(false),
             drawing: RwSignal::new(drawing),
             editing_node: RwSignal::new(None),
+            page: RwSignal::new("home".into()),
+            back_to: RwSignal::new("home".into()),
+            breakpoint: RwSignal::new(None),
+            animation_generation: RwSignal::new(0),
         }
+    }
+
+    /// The open page's or component's top level. Untracked: views that list it also track
+    /// `page`.
+    pub fn nodes<'a>(&self, d: &'a Document) -> &'a Vec<Node> {
+        self.page
+            .with_untracked(|id| d.tree(id).unwrap_or(&d.pages[0].nodes))
+    }
+
+    pub fn nodes_mut<'a>(&self, d: &'a mut Document) -> &'a mut Vec<Node> {
+        let id = self.page.get_untracked();
+        if d.tree(&id).is_some() {
+            d.tree_mut(&id).expect("checked above")
+        } else {
+            &mut d.pages[0].nodes
+        }
+    }
+
+    /// The id of the open page or component, or home's if it is gone.
+    pub fn open_tree(&self, d: &Document) -> NodeId {
+        let id = self.page.get_untracked();
+        if d.tree(&id).is_some() {
+            id
+        } else {
+            d.pages[0].id.clone()
+        }
+    }
+
+    /// The component open for editing, if one is. Tracks `page` and the document.
+    pub fn open_component(&self) -> Option<NodeId> {
+        let id = self.page.get();
+        self.doc.with(|d| d.component(&id).map(|c| c.id.clone()))
+    }
+
+    /// Opens a page or component, remembering the last page to come back to.
+    pub fn open(&self, id: NodeId) {
+        if self.doc.with_untracked(|d| d.page(&id).is_some()) {
+            self.back_to.set(id.clone());
+        }
+        self.page.set(id);
+    }
+
+    /// Finds a node in any page or component, so a drawing opened from one still saves back.
+    pub fn find_mut<'a>(d: &'a mut Document, id: &str) -> Option<&'a mut Node> {
+        d.trees_mut()
+            .find_map(|nodes| vellum_core::find_mut(nodes, id))
     }
 
     /// Applies a discrete change (insert, move, delete) as its own undo step.

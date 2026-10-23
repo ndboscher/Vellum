@@ -1,0 +1,18 @@
+---
+source: crates/export-react/tests/react.rs
+expression: "result.file(\"src/App.jsx\").unwrap().contents"
+---
+import "./styles.css";
+import Home from "./pages/Home";
+import PricingPlans from "./pages/PricingPlans";
+
+const routes = {
+  "/": Home,
+  "/pricing": PricingPlans,
+};
+
+export default function App() {
+  const path = window.location.pathname.replace(/\/+$/, "") || "/";
+  const Page = routes[path] ?? Home;
+  return <Page />;
+}

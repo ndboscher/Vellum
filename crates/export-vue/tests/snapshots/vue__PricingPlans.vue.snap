@@ -1,0 +1,24 @@
+---
+source: crates/export-vue/tests/vue.rs
+expression: "result.file(\"src/pages/PricingPlans.vue\").unwrap().contents"
+---
+<script setup>
+import PlanCard from "../components/PlanCard.vue";
+</script>
+
+<template>
+  <main class="page">
+    <nav class="blk-nav nav-2">
+      <a class="blk-nav-link" href="/">Home</a>
+      <a class="blk-nav-link" href="/pricing" aria-current="page">Pricing &amp; Plans</a>
+    </nav>
+    <h1 class="blk-heading heading-2">Pricing</h1>
+    <div class="blk-container grid-2">
+      <PlanCard />
+      <PlanCard title="Pro" price="$12 a month" signup="/pricing#pro" />
+    </div>
+    <div class="button-4">
+      <a class="blk-button" href="/">Back home</a>
+    </div>
+  </main>
+</template>

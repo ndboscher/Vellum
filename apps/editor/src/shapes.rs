@@ -2,10 +2,11 @@
 
 use leptos::prelude::*;
 use vellum_schema::{Geometry, Shape};
-use vellum_vector::path_data;
+use vellum_vector::geometry_path_data;
 
-/// Renders a shape. `hit` tags it with `data-shape-id` so the select tool can find it.
-pub fn shape_view(shape: &Shape, hit: bool) -> AnyView {
+/// Renders a shape. `hit` tags it with `data-shape-id` so the select tool can find it, and
+/// `style` is an inline style, such as one playing its animation.
+pub fn shape_view(shape: &Shape, hit: bool, style: Option<String>) -> AnyView {
     let fill = if shape.geometry.is_filled() {
         shape.style.fill.clone()
     } else {
@@ -16,25 +17,26 @@ pub fn shape_view(shape: &Shape, hit: bool) -> AnyView {
     let id = hit.then(|| shape.id.clone());
     match &shape.geometry {
         Geometry::Rect { x, y, w, h } => view! {
-            <rect x=*x y=*y width=*w height=*h fill=fill stroke=stroke stroke-width=width data-shape-id=id />
+            <rect x=*x y=*y width=*w height=*h fill=fill stroke=stroke stroke-width=width data-shape-id=id style=style.clone() />
         }
         .into_any(),
         Geometry::Ellipse { cx, cy, rx, ry } => view! {
-            <ellipse cx=*cx cy=*cy rx=*rx ry=*ry fill=fill stroke=stroke stroke-width=width data-shape-id=id />
+            <ellipse cx=*cx cy=*cy rx=*rx ry=*ry fill=fill stroke=stroke stroke-width=width data-shape-id=id style=style.clone() />
         }
         .into_any(),
         Geometry::Line { x1, y1, x2, y2 } => view! {
             <line
                 x1=*x1 y1=*y1 x2=*x2 y2=*y2
-                stroke=stroke stroke-width=width stroke-linecap="round" data-shape-id=id
+                stroke=stroke stroke-width=width stroke-linecap="round" data-shape-id=id style=style.clone()
             />
         }
         .into_any(),
-        Geometry::Path { nodes, closed } => view! {
+        Geometry::Path { subpaths, .. } => view! {
             <path
-                d=path_data(nodes, *closed)
+                d=geometry_path_data(&shape.geometry)
+                fill-rule=(!subpaths.is_empty()).then_some("evenodd")
                 fill=fill stroke=stroke stroke-width=width
-                stroke-linejoin="round" stroke-linecap="round" data-shape-id=id
+                stroke-linejoin="round" stroke-linecap="round" data-shape-id=id style=style.clone()
             />
         }
         .into_any(),

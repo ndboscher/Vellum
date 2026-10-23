@@ -37,6 +37,9 @@ This builds the editor and serves it at http://127.0.0.1:8080. Your page is save
 **Page editor**
 - Drag blocks (heading, text, button, image, spacer, vector graphic) from the palette onto the page, or click to append.
 - Drag blocks on the page to reorder; select one to edit its content, alignment, colors and padding.
+- **Pages:** add, rename, reorder and delete pages, each with its own path (`/about`). A **Navigation** block links every page, and buttons can link to a page by its path.
+- **Components:** select a block and choose **Make component** to reuse it. Place it on any page from the palette, and edit it once to update every placement. Give a component props (text, link or image), bind a block's text or link to one, and set each placement's values in the inspector. React exports get one component file each, with props; HTML gets the markup filled in.
+- **Breakpoints:** switch the canvas to Tablet (900px and narrower) or Mobile (600px and narrower) to preview it, and set per-breakpoint overrides: hide a block, change alignment, padding or type, flip a row to a column, or change a grid's columns. Exports turn them into media queries.
 - Undo/redo (Ctrl+Z, Ctrl+Shift+Z) and automatic saving.
 
 **Vector canvas**
@@ -52,12 +55,13 @@ apps/
   editor/     Leptos (WASM): page editor, vector canvas, inspector
   server/     Axum: serves the editor, loads and saves the project document
 crates/
-  schema/     The page document types (serde) shared by everything
+  schema/     The site document types (serde) shared by everything
   core/       Editing operations and undo/redo, testable without a browser
   vector/     Path data, shape geometry and SVG output
   export-core/   Exporter trait, registry, shared markup and CSS generation
   export-html/   Static HTML + CSS target
   export-react/  React (JSX/TSX) target
+  export-vue/    Vue 3 single-file component target
   cli/        The `vellum` command (`dev`, `serve`, `export`)
 ```
 

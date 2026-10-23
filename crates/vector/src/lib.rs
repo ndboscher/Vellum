@@ -1,7 +1,7 @@
 //! Geometry helpers for the vector tools and SVG output.
 
 use std::fmt::Write;
-use vellum_schema::{Drawing, Geometry, PathNode, Point, Shape};
+use vellum_schema::{css, Drawing, Geometry, PathNode, Point, Shape};
 
 /// Rounds to two decimals so generated SVG stays short and stable.
 fn fmt(n: f64) -> String {
@@ -14,6 +14,9 @@ fn fmt(n: f64) -> String {
 }
 
 /// Normalised box `(x, y, w, h)` from two drag corners.
+pub mod boolean;
+pub mod import;
+
 pub fn box_from_drag(a: Point, b: Point) -> (f64, f64, f64, f64) {
     (
         a.x.min(b.x),
@@ -56,6 +59,33 @@ pub fn is_meaningful(g: &Geometry) -> bool {
         Geometry::Line { x1, y1, x2, y2 } => (x2 - x1).hypot(y2 - y1) > 2.0,
         Geometry::Path { nodes, .. } => nodes.len() >= 2,
     }
+}
+
+fn move_node(n: &PathNode, dx: f64, dy: f64) -> PathNode {
+    PathNode {
+        x: n.x + dx,
+        y: n.y + dy,
+        handle_in: n.handle_in.map(|p| shift(p, dx, dy)),
+        handle_out: n.handle_out.map(|p| shift(p, dx, dy)),
+    }
+}
+
+/// Path data for a whole path shape: its outline, then each closed subpath.
+pub fn geometry_path_data(geometry: &Geometry) -> String {
+    let Geometry::Path {
+        nodes,
+        closed,
+        subpaths,
+    } = geometry
+    else {
+        return String::new();
+    };
+    let mut d = path_data(nodes, *closed);
+    for sub in subpaths {
+        d.push(' ');
+        d.push_str(&path_data(sub, true));
+    }
+    d
 }
 
 /// SVG path data for a pen path: straight segments unless either end carries a handle.
@@ -128,16 +158,16 @@ pub fn translate(g: &Geometry, dx: f64, dy: f64) -> Geometry {
             x2: x2 + dx,
             y2: y2 + dy,
         },
-        Geometry::Path { nodes, closed } => Geometry::Path {
-            nodes: nodes
+        Geometry::Path {
+            nodes,
+            closed,
+            subpaths,
+        } => Geometry::Path {
+            subpaths: subpaths
                 .iter()
-                .map(|n| PathNode {
-                    x: n.x + dx,
-                    y: n.y + dy,
-                    handle_in: n.handle_in.map(|p| shift(p, dx, dy)),
-                    handle_out: n.handle_out.map(|p| shift(p, dx, dy)),
-                })
+                .map(|sub| sub.iter().map(|n| move_node(n, dx, dy)).collect())
                 .collect(),
+            nodes: nodes.iter().map(|n| move_node(n, dx, dy)).collect(),
             closed: *closed,
         },
     }
@@ -149,8 +179,60 @@ fn escape_attr(s: &str) -> String {
         .replace('<', "&lt;")
 }
 
-/// One shape as an SVG element string.
+/// The class an animated shape gets in a standalone SVG file.
+pub fn shape_class(shape: &Shape) -> String {
+    format!("s-{}", css::slug(&shape.id))
+}
+
+/// A `<style>` element playing the drawing's shape animations, or `None` if nothing animates.
+/// It honors `prefers-reduced-motion`.
+pub fn animation_style(drawing: &Drawing) -> Option<String> {
+    let mut css_text = String::new();
+    let mut animated = Vec::new();
+    for shape in &drawing.shapes {
+        let Some(animation) = &shape.animation else {
+            continue;
+        };
+        let class = shape_class(shape);
+        let name = format!("{class}-anim");
+        let _ = writeln!(css_text, "@keyframes {name} {{");
+        for (stop, declarations) in animation.keyframe_rules() {
+            let body: Vec<_> = declarations
+                .iter()
+                .map(|(p, v)| format!("{p}: {v}"))
+                .collect();
+            let _ = writeln!(css_text, "  {stop} {{ {}; }}", body.join("; "));
+        }
+        css_text.push_str("}\n");
+        let body: Vec<_> = animation
+            .declarations(&name, true)
+            .iter()
+            .map(|(p, v)| format!("{p}: {v}"))
+            .collect();
+        let _ = writeln!(css_text, ".{class} {{ {}; }}", body.join("; "));
+        animated.push(format!(".{class}"));
+    }
+    if animated.is_empty() {
+        return None;
+    }
+    let _ = writeln!(
+        css_text,
+        "@media (prefers-reduced-motion: reduce) {{ {} {{ animation: none; }} }}",
+        animated.join(", ")
+    );
+    Some(format!("<style>\n{css_text}</style>"))
+}
+
+/// One shape as an SVG element string. Animated shapes carry their [`shape_class`].
 pub fn shape_to_svg(shape: &Shape) -> String {
+    let svg = shape_element(shape);
+    match &shape.animation {
+        Some(_) => svg.replacen(' ', &format!(r#" class="{}" "#, shape_class(shape)), 1),
+        None => svg,
+    }
+}
+
+fn shape_element(shape: &Shape) -> String {
     let fill = if shape.geometry.is_filled() {
         escape_attr(&shape.style.fill)
     } else {
@@ -185,9 +267,14 @@ pub fn shape_to_svg(shape: &Shape) -> String {
             fmt(*x2),
             fmt(*y2)
         ),
-        Geometry::Path { nodes, closed } => format!(
-            r#"<path d="{}" {style} stroke-linejoin="round" stroke-linecap="round"/>"#,
-            path_data(nodes, *closed)
+        Geometry::Path { subpaths, .. } => format!(
+            r#"<path d="{}" {style}{} stroke-linejoin="round" stroke-linecap="round"/>"#,
+            geometry_path_data(&shape.geometry),
+            if subpaths.is_empty() {
+                ""
+            } else {
+                r#" fill-rule="evenodd""#
+            }
         ),
     }
 }
@@ -200,6 +287,11 @@ pub fn drawing_to_svg(drawing: &Drawing) -> String {
         h = fmt(drawing.height)
     );
     out.push('\n');
+    if let Some(style) = animation_style(drawing) {
+        for line in style.lines() {
+            let _ = writeln!(out, "  {line}");
+        }
+    }
     for s in &drawing.shapes {
         let _ = writeln!(out, "  {}", shape_to_svg(s));
     }
@@ -285,6 +377,7 @@ mod tests {
     #[test]
     fn translate_moves_anchors_and_handles() {
         let g = Geometry::Path {
+            subpaths: vec![],
             nodes: vec![PathNode {
                 handle_out: Some(p(2.0, 2.0)),
                 ..PathNode::corner(1.0, 1.0)
@@ -310,28 +403,54 @@ mod tests {
             width: 100.0,
             height: 50.0,
             shapes: vec![
-                Shape {
-                    id: "r".into(),
-                    style: style.clone(),
-                    geometry: Geometry::Rect {
+                Shape::new(
+                    "r",
+                    style.clone(),
+                    Geometry::Rect {
                         x: 0.0,
                         y: 0.0,
                         w: 10.0,
                         h: 10.0,
                     },
-                },
-                Shape {
-                    id: "p".into(),
+                ),
+                Shape::new(
+                    "p",
                     style,
-                    geometry: Geometry::Path {
+                    Geometry::Path {
                         nodes: vec![PathNode::corner(0.0, 0.0), PathNode::corner(5.0, 5.0)],
                         closed: false,
+                        subpaths: vec![],
                     },
-                },
+                ),
             ],
         });
         assert!(svg.contains(r#"viewBox="0 0 100 50""#));
         assert!(svg.contains(r##"<rect x="0" y="0" width="10" height="10" fill="#7c5cff""##));
         assert!(svg.contains(r#"<path d="M0 0 L5 5" fill="none""#));
+        assert!(!svg.contains("<style>"));
+    }
+
+    #[test]
+    fn animated_shapes_get_a_class_and_keyframes() {
+        let mut shape = Shape::new(
+            "7b",
+            ShapeStyle::default(),
+            Geometry::Ellipse {
+                cx: 5.0,
+                cy: 5.0,
+                rx: 5.0,
+                ry: 5.0,
+            },
+        );
+        shape.animation = vellum_schema::Animation::preset("spin");
+        let svg = drawing_to_svg(&Drawing {
+            width: 10.0,
+            height: 10.0,
+            shapes: vec![shape],
+        });
+        assert!(svg.contains(r#"<ellipse class="s-7b" cx="5""#));
+        assert!(svg.contains("  @keyframes s-7b-anim {\n    0% { opacity: 1; transform: translate(0px, 0px) rotate(0deg) scale(1); }"));
+        assert!(svg.contains(".s-7b { animation: s-7b-anim 4s linear 0s infinite normal both; transform-box: fill-box; transform-origin: center; }"));
+        assert!(svg.contains("prefers-reduced-motion: reduce) { .s-7b { animation: none; } }"));
     }
 }

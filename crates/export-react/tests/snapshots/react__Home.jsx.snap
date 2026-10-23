@@ -1,10 +1,8 @@
 ---
 source: crates/export-react/tests/react.rs
-expression: "result.file(\"src/Page.jsx\").unwrap().contents"
+expression: "result.file(\"src/pages/Home.jsx\").unwrap().contents"
 ---
-import "./Page.css";
-
-export default function Page() {
+export default function Home() {
   return (
     <main className="page">
       <h1 className="blk-heading heading">{"Build sites <fast>"}</h1>

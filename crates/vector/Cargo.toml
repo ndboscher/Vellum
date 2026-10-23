@@ -7,3 +7,5 @@ license.workspace = true
 
 [dependencies]
 vellum-schema.workspace = true
+geo = { version = "0.33.1", default-features = false }
+usvg = { version = "0.48.1", default-features = false }
