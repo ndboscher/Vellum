@@ -19,9 +19,11 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo clippy -p vellum-editor --target wasm32-unknown-unknown -- -D warnings
       - run: cargo test --workspace
-      - uses: jetli/trunk-action@v0.5.0
-        with:
-          version: v0.21.14
+      # trunk-action moves the binary across devices and fails on current runners.
+      - name: Install trunk
+        run: |
+          curl -sSfL https://github.com/trunk-rs/trunk/releases/download/v0.21.14/trunk-x86_64-unknown-linux-gnu.tar.gz \
+            | tar xz -C "$HOME/.cargo/bin"
       - name: Build the editor
         run: trunk build --release
         working-directory: apps/editor
