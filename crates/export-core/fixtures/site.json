@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": 4,
   "title": "Alpaca & Co",
   "pages": [
     {
@@ -283,6 +283,59 @@
           }
         },
         {
+          "id": "plans",
+          "type": "container",
+          "style": {
+            "align": "left",
+            "color": "{text}",
+            "background": null,
+            "padding": "{md}"
+          },
+          "layout": {
+            "mode": "grid",
+            "direction": "column",
+            "wrap": false,
+            "columns": 2,
+            "gap": "{md}",
+            "align": "stretch",
+            "justify": "start"
+          },
+          "responsive": {
+            "mobile": {
+              "columns": 1
+            }
+          },
+          "children": [
+            {
+              "id": "p1",
+              "type": "instance",
+              "component": "plan",
+              "style": {
+                "align": "left",
+                "color": "{text}",
+                "background": null,
+                "padding": "{md}"
+              }
+            },
+            {
+              "id": "p2",
+              "type": "instance",
+              "component": "plan",
+              "style": {
+                "align": "left",
+                "color": "{text}",
+                "background": null,
+                "padding": "{md}"
+              },
+              "props": {
+                "title": "Pro",
+                "price": "$12 a month",
+                "signup": "/pricing#pro"
+              }
+            }
+          ]
+        },
+        {
           "id": "pb",
           "type": "button",
           "label": "Back home",
@@ -293,6 +346,96 @@
             "background": null,
             "padding": "{md}"
           }
+        }
+      ]
+    }
+  ],
+  "components": [
+    {
+      "id": "plan",
+      "name": "Plan card",
+      "props": [
+        {
+          "name": "title",
+          "kind": "text",
+          "default": "Starter"
+        },
+        {
+          "name": "price",
+          "kind": "text",
+          "default": "Free"
+        },
+        {
+          "name": "signup",
+          "kind": "link",
+          "default": "/"
+        }
+      ],
+      "nodes": [
+        {
+          "id": "card",
+          "type": "container",
+          "style": {
+            "align": "left",
+            "color": "{text}",
+            "background": "{surface}",
+            "padding": "{lg}"
+          },
+          "layout": {
+            "mode": "flex",
+            "direction": "column",
+            "wrap": false,
+            "columns": 2,
+            "gap": "{sm}",
+            "align": "stretch",
+            "justify": "start"
+          },
+          "children": [
+            {
+              "id": "ct",
+              "type": "heading",
+              "text": "Starter",
+              "level": 2,
+              "style": {
+                "align": "left",
+                "color": "{text}",
+                "background": null,
+                "padding": 0
+              },
+              "bindings": {
+                "text": "title"
+              }
+            },
+            {
+              "id": "cp",
+              "type": "text",
+              "text": "Free",
+              "style": {
+                "align": "left",
+                "color": "{text}",
+                "background": null,
+                "padding": 0
+              },
+              "bindings": {
+                "text": "price"
+              }
+            },
+            {
+              "id": "cb",
+              "type": "button",
+              "label": "Choose",
+              "href": "/",
+              "style": {
+                "align": "left",
+                "color": "{text}",
+                "background": null,
+                "padding": 0
+              },
+              "bindings": {
+                "href": "signup"
+              }
+            }
+          ]
         }
       ]
     }

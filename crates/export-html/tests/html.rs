@@ -88,6 +88,15 @@ fn writes_a_file_per_page_with_links_between_them() {
         home.contains(r#"<a class="blk-nav-link" href="index.html" aria-current="page">Home</a>"#)
     );
     assert!(pricing.contains(r#"<a class="blk-nav-link" href="index.html">Home</a>"#));
+    // Component instances print as plain markup with their props filled in.
+    assert!(pricing.contains(r#"<h2 class="blk-heading heading-3">Pro</h2>"#));
+    assert!(pricing.contains(r##"href="pricing.html#pro""##));
+    assert_eq!(
+        pricing
+            .matches(r#"<div class="blk-component plan-card">"#)
+            .count(),
+        2
+    );
 }
 
 #[test]

@@ -1,5 +1,9 @@
 //! Editing operations on a [`Document`], kept free of any UI so they can be tested natively.
 
+mod components;
+
+pub use components::*;
+
 use vellum_schema::{
     css, parse_token_ref, token_ref, ColorToken, Document, Drawing, FontToken, Layout, Length,
     Node, NodeId, NodeKind, Page, SpaceToken, TokenKind,
@@ -478,8 +482,8 @@ fn rewrite_references(doc: &mut Document, kind: TokenKind, name: &str, to: Refer
             }
         }
     };
-    for page in &mut doc.pages {
-        for_each_mut(&mut page.nodes, &mut visit);
+    for tree in doc.trees_mut() {
+        for_each_mut(tree, &mut visit);
     }
 }
 

@@ -1,6 +1,6 @@
 use serde::Deserialize;
 
-use vellum_export_core::lower::{lower_site, print_css, OutputNode, VOID_ELEMENTS};
+use vellum_export_core::lower::{lower_site, pascal_case, print_css, OutputNode, VOID_ELEMENTS};
 use vellum_export_core::{
     parse_options, ExportError, ExportOptions, ExportResult, Exporter, OutputFile,
 };
@@ -59,11 +59,12 @@ pub fn export_react(doc: &Document, options: &ReactOptions) -> Result<ExportResu
     let css = print_css(&site.rules);
 
     let mut used = vec![name.clone()];
+    used.extend(site.components.iter().map(|c| c.name.clone()));
     let components: Vec<String> = site
         .pages
         .iter()
         .map(|page| {
-            let base = component_name(&page.name);
+            let base = pascal_case(&page.name, "Page");
             let mut candidate = base.clone();
             let mut n = 2;
             while used.contains(&candidate) {
@@ -86,17 +87,51 @@ pub fn export_react(doc: &Document, options: &ReactOptions) -> Result<ExportResu
     for (page, component) in site.pages.iter().zip(&components) {
         app.push(format!("import {component} from \"./pages/{component}\";"));
         let root = OutputNode::Element(page.root.clone());
+        let mut lines = imports(&root, "../components");
+        lines.extend([
+            format!("export default function {component}() {{"),
+            "  return (".to_owned(),
+            print_jsx(&root, 2),
+            "  );".to_owned(),
+            "}".to_owned(),
+            String::new(),
+        ]);
         files.push(OutputFile {
             path: format!("src/pages/{component}.{ext}"),
-            contents: [
-                format!("export default function {component}() {{"),
-                "  return (".to_owned(),
-                print_jsx(&root, 2),
-                "  );".to_owned(),
-                "}".to_owned(),
-                String::new(),
-            ]
-            .join("\n"),
+            contents: lines.join("\n"),
+        });
+    }
+    for component in &site.components {
+        let root = OutputNode::Element(component.root.clone());
+        let mut lines = imports(&root, ".");
+        let params = component
+            .props
+            .iter()
+            .map(|p| format!("{} = {}", p.name, js_string(&p.default)))
+            .collect::<Vec<_>>();
+        let signature = match (params.is_empty(), options.typescript) {
+            (true, _) => String::new(),
+            (false, false) => format!("{{ {} }}", params.join(", ")),
+            (false, true) => {
+                let types = component
+                    .props
+                    .iter()
+                    .map(|p| format!("{}?: string", p.name))
+                    .collect::<Vec<_>>();
+                format!("{{ {} }}: {{ {} }}", params.join(", "), types.join("; "))
+            }
+        };
+        lines.extend([
+            format!("export default function {}({signature}) {{", component.name),
+            "  return (".to_owned(),
+            print_jsx(&root, 2),
+            "  );".to_owned(),
+            "}".to_owned(),
+            String::new(),
+        ]);
+        files.push(OutputFile {
+            path: format!("src/components/{}.{ext}", component.name),
+            contents: lines.join("\n"),
         });
     }
     let routes_type = if options.typescript {
@@ -138,39 +173,57 @@ pub fn export_react(doc: &Document, options: &ReactOptions) -> Result<ExportResu
     })
 }
 
-/// A PascalCase component name for a page called `name`, such as `AboutUs`.
-fn component_name(name: &str) -> String {
-    let mut out = String::new();
-    for word in name.split(|c: char| !c.is_ascii_alphanumeric()) {
-        let mut chars = word.chars();
-        if let Some(first) = chars.next() {
-            out.push(first.to_ascii_uppercase());
-            out.extend(chars);
+/// Import lines for every component used in `root`, then a blank line; nothing if none are.
+fn imports(root: &OutputNode, dir: &str) -> Vec<String> {
+    fn collect(node: &OutputNode, out: &mut Vec<String>) {
+        match node {
+            OutputNode::Instance(i) if !out.contains(&i.component) => out.push(i.component.clone()),
+            OutputNode::Element(el) => el.children.iter().for_each(|c| collect(c, out)),
+            _ => {}
         }
     }
-    match out.chars().next() {
-        Some(c) if c.is_ascii_alphabetic() => out,
-        _ => format!("Page{out}"),
+    let mut names = Vec::new();
+    collect(root, &mut names);
+    let mut lines: Vec<_> = names
+        .iter()
+        .map(|n| format!("import {n} from \"{dir}/{n}\";"))
+        .collect();
+    if !lines.is_empty() {
+        lines.push(String::new());
     }
+    lines
 }
 
 pub fn print_jsx(node: &OutputNode, depth: usize) -> String {
     let pad = "  ".repeat(depth);
     let el = match node {
         OutputNode::Text(text) => return format!("{pad}{}", jsx_text(text)),
+        OutputNode::Prop(prop) => return format!("{pad}{{{prop}}}"),
+        OutputNode::Instance(instance) => {
+            let props: String = instance
+                .props
+                .iter()
+                .map(|(name, value)| format!(" {name}={}", jsx_attr_value(value)))
+                .collect();
+            return format!("{pad}<{}{props} />", instance.component);
+        }
         OutputNode::Element(el) => el,
     };
 
-    let attrs: String = el
+    let mut attrs: String = el
         .attrs
         .iter()
         .map(|(name, value)| format!(" {}={}", jsx_attr_name(name), jsx_attr_value(value)))
         .collect();
+    for (name, prop) in &el.prop_attrs {
+        attrs.push_str(&format!(" {}={{{prop}}}", jsx_attr_name(name)));
+    }
     let open = format!("<{}{attrs}", el.tag);
     match el.children.as_slice() {
         [] => format!("{pad}{open} />"),
         _ if VOID_ELEMENTS.contains(&el.tag) => format!("{pad}{open} />"),
         [OutputNode::Text(text)] => format!("{pad}{open}>{}</{}>", jsx_text(text), el.tag),
+        [OutputNode::Prop(prop)] => format!("{pad}{open}>{{{prop}}}</{}>", el.tag),
         children => {
             let mut lines = vec![format!("{pad}{open}>")];
             lines.extend(children.iter().map(|child| print_jsx(child, depth + 1)));

@@ -11,9 +11,10 @@ use serde::{Deserialize, Serialize};
 /// Bumped whenever the serialized shape changes, so old files can be migrated.
 ///
 /// Version 2 added design [`Tokens`] and [`NodeKind::Container`]. Version 3 made the document a
-/// site of [`Page`]s and added per-breakpoint [`Override`]s and [`NodeKind::Nav`]. Older files
-/// still load: they get the default tokens, and their block list becomes the home page.
-pub const SCHEMA_VERSION: u32 = 3;
+/// site of [`Page`]s and added per-breakpoint [`Override`]s and [`NodeKind::Nav`]. Version 4
+/// added reusable [`Component`]s. Older files still load: they get the default tokens, and their
+/// block list becomes the home page.
+pub const SCHEMA_VERSION: u32 = 4;
 
 pub type NodeId = String;
 
@@ -26,6 +27,9 @@ pub struct Document {
     pub tokens: Tokens,
     /// In navigation order. The first page is the home page, at `/`.
     pub pages: Vec<Page>,
+    /// Reusable blocks, placed on pages as [`NodeKind::Instance`]s.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub components: Vec<Component>,
 }
 
 impl Default for Document {
@@ -35,11 +39,40 @@ impl Default for Document {
             title: "Untitled site".into(),
             tokens: Tokens::default(),
             pages: vec![Page::home(Vec::new())],
+            components: Vec::new(),
         }
     }
 }
 
 impl Document {
+    pub fn component(&self, id: &str) -> Option<&Component> {
+        self.components.iter().find(|c| c.id == id)
+    }
+
+    pub fn component_mut(&mut self, id: &str) -> Option<&mut Component> {
+        self.components.iter_mut().find(|c| c.id == id)
+    }
+
+    /// The node tree of the page or component with this id.
+    pub fn tree(&self, id: &str) -> Option<&Vec<Node>> {
+        self.page(id)
+            .map(|p| &p.nodes)
+            .or_else(|| self.component(id).map(|c| &c.nodes))
+    }
+
+    pub fn tree_mut(&mut self, id: &str) -> Option<&mut Vec<Node>> {
+        if self.page(id).is_some() {
+            return self.page_mut(id).map(|p| &mut p.nodes);
+        }
+        self.component_mut(id).map(|c| &mut c.nodes)
+    }
+
+    /// Every node tree: each page's, then each component's.
+    pub fn trees_mut(&mut self) -> impl Iterator<Item = &mut Vec<Node>> {
+        let pages = self.pages.iter_mut().map(|p| &mut p.nodes);
+        pages.chain(self.components.iter_mut().map(|c| &mut c.nodes))
+    }
+
     pub fn page(&self, id: &str) -> Option<&Page> {
         self.pages.iter().find(|p| p.id == id)
     }
@@ -85,6 +118,8 @@ struct DocumentRepr {
     pages: Vec<Page>,
     #[serde(default)]
     nodes: Option<Vec<Node>>,
+    #[serde(default)]
+    components: Vec<Component>,
 }
 
 impl From<DocumentRepr> for Document {
@@ -98,6 +133,7 @@ impl From<DocumentRepr> for Document {
             title: repr.title,
             tokens: repr.tokens,
             pages,
+            components: repr.components,
         }
     }
 }
@@ -112,6 +148,58 @@ pub struct Page {
     pub path: String,
     /// The page's top level, stacked vertically. Containers hold further nodes.
     pub nodes: Vec<Node>,
+}
+
+/// A reusable group of blocks. Its props are values each instance can set, shown by the
+/// content fields bound to them.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Component {
+    pub id: NodeId,
+    pub name: String,
+    #[serde(default)]
+    pub props: Vec<PropDef>,
+    pub nodes: Vec<Node>,
+}
+
+impl Component {
+    pub fn prop(&self, name: &str) -> Option<&PropDef> {
+        self.props.iter().find(|p| p.name == name)
+    }
+}
+
+/// One prop of a component. Its name is a JavaScript identifier, since React and Vue exports
+/// use it as one.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PropDef {
+    pub name: String,
+    pub kind: PropKind,
+    pub default: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PropKind {
+    Text,
+    /// A URL a visitor follows; exports sanitize it and point site paths at pages.
+    Link,
+    /// An image URL.
+    Image,
+}
+
+impl PropKind {
+    pub const ALL: [PropKind; 3] = [PropKind::Text, PropKind::Link, PropKind::Image];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PropKind::Text => "text",
+            PropKind::Link => "link",
+            PropKind::Image => "image",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|k| k.as_str() == s)
+    }
 }
 
 impl Page {
@@ -148,6 +236,10 @@ pub struct Node {
     /// Style changes below each breakpoint's width.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub responsive: BTreeMap<Breakpoint, Override>,
+    /// Inside a component: content fields (see [`NodeKind::bindable_fields`]) that show a prop's
+    /// value instead of their own, as field name to prop name.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub bindings: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -181,6 +273,13 @@ pub enum NodeKind {
     },
     /// Links to every page of the site, in page order.
     Nav {},
+    /// A placement of a [`Component`], with values for its props. Missing props use the
+    /// prop's default.
+    Instance {
+        component: NodeId,
+        #[serde(default)]
+        props: BTreeMap<String, String>,
+    },
 }
 
 impl Node {
@@ -190,6 +289,7 @@ impl Node {
             style: Style::default(),
             kind,
             responsive: BTreeMap::new(),
+            bindings: BTreeMap::new(),
         }
     }
 
@@ -220,7 +320,42 @@ impl NodeKind {
             NodeKind::Svg { .. } => "svg",
             NodeKind::Container { .. } => "container",
             NodeKind::Nav {} => "nav",
+            NodeKind::Instance { .. } => "instance",
         }
+    }
+
+    /// The content fields a component can bind to a prop, with the kind of value each holds.
+    pub fn bindable_fields(&self) -> &'static [(&'static str, PropKind)] {
+        match self {
+            NodeKind::Heading { .. } | NodeKind::Text { .. } => &[("text", PropKind::Text)],
+            NodeKind::Button { .. } => &[("label", PropKind::Text), ("href", PropKind::Link)],
+            NodeKind::Image { .. } => &[("src", PropKind::Image), ("alt", PropKind::Text)],
+            _ => &[],
+        }
+    }
+
+    /// The value of a bindable field.
+    pub fn field(&self, name: &str) -> Option<&str> {
+        match (self, name) {
+            (NodeKind::Heading { text, .. } | NodeKind::Text { text }, "text") => Some(text),
+            (NodeKind::Button { label, .. }, "label") => Some(label),
+            (NodeKind::Button { href, .. }, "href") => Some(href),
+            (NodeKind::Image { src, .. }, "src") => Some(src),
+            (NodeKind::Image { alt, .. }, "alt") => Some(alt),
+            _ => None,
+        }
+    }
+
+    pub fn set_field(&mut self, name: &str, value: String) {
+        let slot = match (self, name) {
+            (NodeKind::Heading { text, .. } | NodeKind::Text { text }, "text") => text,
+            (NodeKind::Button { label, .. }, "label") => label,
+            (NodeKind::Button { href, .. }, "href") => href,
+            (NodeKind::Image { src, .. }, "src") => src,
+            (NodeKind::Image { alt, .. }, "alt") => alt,
+            _ => return,
+        };
+        *slot = value;
     }
 }
 
@@ -967,6 +1102,7 @@ mod tests {
                     level: 1,
                 },
                 responsive: BTreeMap::new(),
+                bindings: BTreeMap::new(),
             },
             Node {
                 id: "v".into(),
@@ -995,6 +1131,7 @@ mod tests {
                     },
                 },
                 responsive: BTreeMap::new(),
+                bindings: BTreeMap::new(),
             },
             Node {
                 id: "row".into(),
@@ -1010,6 +1147,7 @@ mod tests {
                         },
                         kind: NodeKind::Text { text: "in".into() },
                         responsive: BTreeMap::new(),
+                        bindings: BTreeMap::new(),
                     }],
                 },
                 responsive: BTreeMap::from([(
@@ -1020,13 +1158,41 @@ mod tests {
                         ..Override::default()
                     },
                 )]),
+                bindings: BTreeMap::new(),
             },
         ];
         doc.pages.push(Page {
             id: "about".into(),
             name: "About".into(),
             path: "/about".into(),
-            nodes: vec![Node::new("n", NodeKind::Nav {})],
+            nodes: vec![
+                Node::new("n", NodeKind::Nav {}),
+                Node::new(
+                    "i",
+                    NodeKind::Instance {
+                        component: "card".into(),
+                        props: BTreeMap::from([("title".into(), "Hi".into())]),
+                    },
+                ),
+            ],
+        });
+        let mut title = Node::new(
+            "ct",
+            NodeKind::Heading {
+                text: "Card".into(),
+                level: 2,
+            },
+        );
+        title.bindings.insert("text".into(), "title".into());
+        doc.components.push(Component {
+            id: "card".into(),
+            name: "Card".into(),
+            props: vec![PropDef {
+                name: "title".into(),
+                kind: PropKind::Text,
+                default: "Card".into(),
+            }],
+            nodes: vec![title],
         });
         let json = serde_json::to_string(&doc).unwrap();
         assert_eq!(serde_json::from_str::<Document>(&json).unwrap(), doc);

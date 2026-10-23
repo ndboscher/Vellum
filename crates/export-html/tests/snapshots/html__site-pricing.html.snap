@@ -17,7 +17,27 @@ expression: pricing
       <a class="blk-nav-link" href="pricing.html" aria-current="page">Pricing &amp; Plans</a>
     </nav>
     <h1 class="blk-heading heading-2">Pricing</h1>
-    <div class="button-3">
+    <div class="blk-container grid-2">
+      <div class="blk-component plan-card">
+        <div class="blk-container stack">
+          <h2 class="blk-heading heading-3">Starter</h2>
+          <p class="blk-text text-4">Free</p>
+          <div class="button-3">
+            <a class="blk-button" href="index.html">Choose</a>
+          </div>
+        </div>
+      </div>
+      <div class="blk-component plan-card">
+        <div class="blk-container stack">
+          <h2 class="blk-heading heading-3">Pro</h2>
+          <p class="blk-text text-4">$12 a month</p>
+          <div class="button-3">
+            <a class="blk-button" href="pricing.html#pro">Choose</a>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="button-4">
       <a class="blk-button" href="index.html">Back home</a>
     </div>
   </main>

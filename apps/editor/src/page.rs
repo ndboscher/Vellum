@@ -5,7 +5,8 @@ use wasm_bindgen::JsCast;
 use web_sys::{DragEvent, Element};
 
 use vellum_core::{
-    children, find, find_mut, insert, locate, move_node, new_node, nudge, remove, PALETTE,
+    children, create_component, find, find_mut, insert, locate, move_node, new_instance, new_node,
+    nudge, remove, would_cycle, PALETTE,
 };
 use vellum_schema::{
     css, parse_token_ref, token_ref, Align, AlignItems, Direction, Justify, Layout, LayoutMode,
@@ -13,11 +14,16 @@ use vellum_schema::{
 };
 
 use crate::shapes::shape_view;
-use crate::site::{override_fields, preview_width, BreakpointBar, PagesPanel};
+use crate::site::{
+    binding_fields, instance_fields, override_fields, preview_width, BreakpointBar,
+    ComponentBanner, PagesPanel,
+};
 use crate::store::{new_id, use_store, Store, View};
 
 const NEW_TYPE: &str = "application/x-vellum-new";
 const MOVE_ID: &str = "application/x-vellum-move";
+/// A `NEW_TYPE` payload starting with this places a component: `component:<id>`.
+const COMPONENT_PREFIX: &str = "component:";
 
 /// Distance in px from a container's edge within which a drop lands beside it, not inside.
 const EDGE: f64 = 14.0;
@@ -86,8 +92,21 @@ impl Canvas {
             .unwrap_or_else(|| self.top_level_end())
     }
 
+    /// Adds a palette block, or with `component:<id>` an instance of that component (unless
+    /// the open component would then contain itself).
     fn add(&self, type_name: &str, target: DropTarget) {
-        if let Some(node) = new_node(type_name, new_id()) {
+        let node = match type_name.strip_prefix(COMPONENT_PREFIX) {
+            Some(component) => self.store.doc.with_untracked(|d| {
+                let tree = self.store.open_tree(d);
+                if would_cycle(d, &tree, component) {
+                    None
+                } else {
+                    new_instance(d, component, new_id())
+                }
+            }),
+            None => new_node(type_name, new_id()),
+        };
+        if let Some(node) = node {
             let id = node.id.clone();
             self.store.commit(|d| {
                 insert(
@@ -170,6 +189,39 @@ pub fn PageEditor() -> impl IntoView {
         })
         .collect_view();
 
+    // Components can be placed like blocks, except inside themselves.
+    let component_palette = move || {
+        let open = store.page.get();
+        store.doc.with(|d| {
+            d.components
+                .iter()
+                .filter(|comp| !would_cycle(d, &open, &comp.id))
+                .map(|comp| {
+                    let payload = format!("{COMPONENT_PREFIX}{}", comp.id);
+                    let payload_click = payload.clone();
+                    view! {
+                        <button
+                            type="button"
+                            class="palette-item component-item"
+                            draggable="true"
+                            on:dragstart=move |ev: DragEvent| {
+                                if let Some(dt) = ev.data_transfer() {
+                                    let _ = dt.set_data(NEW_TYPE, &payload);
+                                    dt.set_effect_allowed("copy");
+                                }
+                            }
+                            on:dragend=move |_| c.set_drop(None)
+                            on:click=move |_| c.add(&payload_click, c.click_target())
+                        >
+                            {comp.name.clone()}
+                            <kbd>"◆"</kbd>
+                        </button>
+                    }
+                })
+                .collect_view()
+        })
+    };
+
     let page_vars = move || {
         let dark = store.dark_preview.get();
         let width = preview_width(store.breakpoint.get());
@@ -183,6 +235,7 @@ pub fn PageEditor() -> impl IntoView {
                 <h2>"Blocks"</h2>
                 <p class="hint">"Drag onto the page or into a Stack, Row or Grid. Click to add next to the selected block."</p>
                 {palette}
+                {component_palette}
             </aside>
 
             <main
@@ -192,6 +245,7 @@ pub fn PageEditor() -> impl IntoView {
                 on:drop=on_drop
             >
                 <div class="stage-inner">
+                <ComponentBanner selected=c.selected />
                 <BreakpointBar />
                 <div class="page" class:dark=move || store.dark_preview.get() style=page_vars on:dragover=over_empty>
                     {move || {
@@ -304,7 +358,7 @@ fn block_row(
             }
         >
             <span class="block-tag">{tag_label(&node)}</span>
-            {block_view(c, &node)}
+            {block_view(c, &node, true)}
         </div>
     }
     .into_any()
@@ -313,6 +367,7 @@ fn block_row(
 fn tag_label(node: &Node) -> &'static str {
     match &node.kind {
         NodeKind::Container { layout, .. } => layout.label(),
+        NodeKind::Instance { .. } => "component",
         kind => kind.type_name(),
     }
 }
@@ -329,7 +384,10 @@ fn inline_style<P: AsRef<str>>(declarations: Vec<(P, String)>) -> String {
 }
 
 /// Renders a block as it will appear on the published page.
-fn block_view(c: Canvas, node: &Node) -> AnyView {
+///
+/// Blocks inside a component instance are not `interactive`: they show the component's look
+/// but are edited in the component itself.
+fn block_view(c: Canvas, node: &Node, interactive: bool) -> AnyView {
     // What the block looks like at the previewed breakpoint.
     let o = node.override_at(c.store.breakpoint.get_untracked());
     let s = &o.apply_style(&node.style);
@@ -387,7 +445,11 @@ fn block_view(c: Canvas, node: &Node) -> AnyView {
             view! {
                 <div class="blk-container" style=inline_style(declarations)>
                     {empty}
-                    {block_list(c, Some(node.id.clone()), layout.is_horizontal(), children.clone())}
+                    {if interactive {
+                        block_list(c, Some(node.id.clone()), layout.is_horizontal(), children.clone())
+                    } else {
+                        children.iter().map(|n| block_view(c, n, false)).collect_view().into_any()
+                    }}
                 </div>
             }
             .into_any()
@@ -410,7 +472,30 @@ fn block_view(c: Canvas, node: &Node) -> AnyView {
             });
             view! { <nav class="blk-nav" style=style>{links}</nav> }.into_any()
         }
+        NodeKind::Instance { component, props } => {
+            let expanded = c.store.doc.with_untracked(|d| {
+                d.component(component).map(|comp| vellum_core::expand(comp, props))
+            });
+            // Cycle checks keep components from holding themselves; a hand-edited file that
+            // does anyway stops here instead of recursing forever.
+            let depth = INSTANCE_DEPTH.with(|d| d.get());
+            let inner = match expanded {
+                Some(nodes) if depth < 8 => {
+                    INSTANCE_DEPTH.with(|d| d.set(depth + 1));
+                    let view = nodes.iter().map(|n| block_view(c, n, false)).collect_view().into_any();
+                    INSTANCE_DEPTH.with(|d| d.set(depth));
+                    view
+                }
+                Some(_) => ().into_any(),
+                None => view! { <div class="empty">"Missing component"</div> }.into_any(),
+            };
+            view! { <div class="blk-component">{inner}</div> }.into_any()
+        }
     }
+}
+
+thread_local! {
+    static INSTANCE_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
 /// Reads and writes one inspector value as text.
@@ -843,6 +928,7 @@ fn Inspector(selected: RwSignal<Option<NodeId>>) -> impl IntoView {
             .into_any(),
             "spacer" => f("Height", Input::Range(8.0, 240.0), kind_field!(Spacer, height)),
             "container" => layout_fields(store, id.clone()),
+            "instance" => instance_fields(store, id.clone(), selected),
             "nav" => view! {
                 <p class="hint">"Links to every page, in the order listed under Pages. The open page's link is highlighted."</p>
             }
@@ -869,7 +955,8 @@ fn Inspector(selected: RwSignal<Option<NodeId>>) -> impl IntoView {
             }
         };
 
-        let text_style = (type_name != "spacer").then(|| {
+        let is_instance = type_name == "instance";
+        let text_style = (type_name != "spacer" && !is_instance).then(|| {
             view! {
                 <hr />
                 {f(
@@ -907,8 +994,28 @@ fn Inspector(selected: RwSignal<Option<NodeId>>) -> impl IntoView {
                 <h3>{label}</h3>
                 {breakpoint.map(|bp| override_fields(store, id.clone(), bp))}
                 {content}
+                {binding_fields(store, id.clone())}
                 {text_style}
-                {color_field(store, id.clone(), "Background", true, |n| n.style.background.clone(), |n, v| n.style.background = v)}
+                {(!is_instance).then(|| color_field(store, id.clone(), "Background", true, |n| n.style.background.clone(), |n, v| n.style.background = v))}
+                {(!is_instance).then(|| {
+                    let id = id.clone();
+                    let make = move |_| {
+                        let instance = new_id();
+                        let mut made = false;
+                        store.commit(|d| {
+                            let tree = store.open_tree(d);
+                            made = create_component(d, &tree, &id, new_id(), instance.clone()).is_some();
+                        });
+                        if made {
+                            selected.set(Some(instance));
+                        }
+                    };
+                    view! {
+                        <button type="button" title="Reuse this block on any page; edits to it update everywhere" on:click=make>
+                            "Make component"
+                        </button>
+                    }
+                })}
                 <div class="row actions">
                     <button type="button" title="Move up" on:click=move |_| store.commit(|d| { nudge(store.nodes_mut(d), &id_up, -1); })>
                         "↑"

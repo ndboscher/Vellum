@@ -90,6 +90,12 @@ pub fn print_html(node: &OutputNode, depth: usize) -> String {
     let el = match node {
         OutputNode::Text(text) => return format!("{pad}{}", escape_text(text)),
         OutputNode::Element(el) => el,
+        // HTML has no components: print each instance's own markup.
+        OutputNode::Instance(instance) => {
+            return print_html(&OutputNode::Element(instance.expanded.clone()), depth)
+        }
+        // Props only appear in component templates, which this target doesn't print.
+        OutputNode::Prop(_) => return String::new(),
     };
 
     let attrs: String = el

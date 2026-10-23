@@ -531,3 +531,59 @@ kbd {
   background: var(--accent-soft);
   color: var(--accent);
 }
+
+/* Components */
+.blk-component {
+  position: relative;
+}
+.block > .blk-component {
+  outline: 1px dashed var(--accent);
+  outline-offset: -1px;
+}
+.component-item kbd {
+  color: var(--accent);
+}
+.component-banner {
+  width: 100%;
+  max-width: 880px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 14px;
+}
+.component-settings .prop-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.prop-row input {
+  font: inherit;
+  font-size: 13px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  min-width: 0;
+}
+.prop-row .prop-name {
+  flex: 1;
+  font-family: ui-monospace, monospace;
+}
+.prop-row button {
+  padding: 2px 6px;
+}
+.component-settings .row button {
+  flex: 1;
+  padding: 4px 6px;
+  font-size: 13px;
+}
+.prop-row .row button {
+  flex: none;
+}

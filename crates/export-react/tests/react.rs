@@ -96,12 +96,13 @@ fn routes_each_page_by_path() {
             "src/App.jsx",
             "src/pages/Home.jsx",
             "src/pages/PricingPlans.jsx",
+            "src/components/PlanCard.jsx",
             "src/styles.css"
         ]
     );
     insta::assert_snapshot!("site-App.jsx", result.file("src/App.jsx").unwrap().contents);
     let pricing = &result.file("src/pages/PricingPlans.jsx").unwrap().contents;
-    assert!(pricing.starts_with("export default function PricingPlans() {"));
+    assert!(pricing.contains("\nexport default function PricingPlans() {"));
     assert!(pricing.contains(r#"<a className="blk-nav-link" href="/pricing" aria-current="page">"#));
     let home = &result.file("src/pages/Home.jsx").unwrap().contents;
     assert!(home.contains(r##"href="/pricing#plans""##));
@@ -116,4 +117,28 @@ fn page_components_never_clash_with_the_root() {
     doc.pages[1].name = "404".into();
     let result = export_react(&doc, &ReactOptions::default()).unwrap();
     assert!(result.file("src/pages/Page404.jsx").is_some());
+}
+
+#[test]
+fn components_become_files_with_props() {
+    let result = export_react(&site(), &ReactOptions::default()).unwrap();
+    let card = &result.file("src/components/PlanCard.jsx").unwrap().contents;
+    insta::assert_snapshot!("site-PlanCard.jsx", card);
+    assert!(card.starts_with(
+        r#"export default function PlanCard({ title = "Starter", price = "Free", signup = "/" }) {"#
+    ));
+    let pricing = &result.file("src/pages/PricingPlans.jsx").unwrap().contents;
+    assert!(pricing.starts_with("import PlanCard from \"../components/PlanCard\";\n\n"));
+    assert!(pricing.contains("<PlanCard />"));
+    assert!(
+        pricing.contains(r##"<PlanCard title="Pro" price="$12 a month" signup="/pricing#pro" />"##)
+    );
+
+    let options = ReactOptions {
+        typescript: true,
+        ..ReactOptions::default()
+    };
+    let result = export_react(&site(), &options).unwrap();
+    let card = &result.file("src/components/PlanCard.tsx").unwrap().contents;
+    assert!(card.contains("}: { title?: string; price?: string; signup?: string }) {"));
 }

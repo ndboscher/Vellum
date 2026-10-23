@@ -11,10 +11,11 @@
 //! [`Layout::declarations`]: vellum_schema::Layout::declarations
 //! [`Tokens::variables`]: vellum_schema::Tokens::variables
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use vellum_schema::{
-    css, Breakpoint, Document, Drawing, Geometry, Node, NodeKind, Page, Shape, Style,
+    css, Breakpoint, Component, Document, Drawing, Geometry, Node, NodeKind, Page, PropKind, Shape,
+    Style,
 };
 use vellum_vector::path_data;
 
@@ -22,6 +23,10 @@ use vellum_vector::path_data;
 pub enum OutputNode {
     Element(Element),
     Text(String),
+    /// Inside a component template: the value of this prop, as text.
+    Prop(String),
+    /// A placed component.
+    Instance(Instance),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -29,7 +34,38 @@ pub struct Element {
     pub tag: &'static str,
     /// Attributes in HTML spelling (`class`, `stroke-width`, `viewBox`).
     pub attrs: Vec<(&'static str, String)>,
+    /// Inside a component template: attributes whose value is a prop, as attribute to prop name.
+    pub prop_attrs: Vec<(&'static str, String)>,
     pub children: Vec<OutputNode>,
+}
+
+/// A component placed on a page or inside another component. Targets with components print
+/// `component` with `props`; the rest print `expanded`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Instance {
+    /// The component's PascalCase name, as in [`LoweredComponent::name`].
+    pub component: String,
+    /// The props this instance sets, already sanitized, in the component's prop order.
+    pub props: Vec<(String, String)>,
+    /// The component's markup with this instance's values filled in.
+    pub expanded: Element,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoweredComponent {
+    /// A unique PascalCase identifier made from the component's name.
+    pub name: String,
+    pub props: Vec<LoweredProp>,
+    /// The component's markup, with [`OutputNode::Prop`]s and `prop_attrs` where props show.
+    pub root: Element,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoweredProp {
+    pub name: String,
+    pub kind: PropKind,
+    /// Sanitized like an instance's value.
+    pub default: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -44,6 +80,8 @@ pub struct CssRule {
 pub struct LoweredSite {
     /// In the document's page order; the first is the home page.
     pub pages: Vec<LoweredPage>,
+    /// In the document's component order.
+    pub components: Vec<LoweredComponent>,
     /// One stylesheet for every page: design tokens as custom properties, base rules shared by
     /// every export, one rule per node, then each breakpoint's overrides, widest first.
     pub rules: Vec<CssRule>,
@@ -171,10 +209,30 @@ pub fn lower_site(doc: &Document, links: PageLinks) -> LoweredSite {
                 .collect(),
         }
     }));
+    let mut used = HashSet::new();
+    let component_names = doc
+        .components
+        .iter()
+        .map(|c| {
+            let base = pascal_case(&c.name, "Component");
+            let mut name = base.clone();
+            let mut n = 2;
+            while !used.insert(name.clone()) {
+                name = format!("{base}{n}");
+                n += 1;
+            }
+            (c.id.clone(), name)
+        })
+        .collect();
     let mut cx = Lowering {
         doc,
         links,
         page: &doc.pages[0],
+        tree: doc.pages[0].id.clone(),
+        template: false,
+        expanding: Vec::new(),
+        component_names,
+        classes: HashMap::new(),
         namer: ClassNamer::default(),
         rules,
         responsive: Breakpoint::ALL.iter().map(|_| Vec::new()).collect(),
@@ -184,10 +242,11 @@ pub fn lower_site(doc: &Document, links: PageLinks) -> LoweredSite {
         .iter()
         .map(|page| {
             cx.page = page;
+            cx.tree = page.id.clone();
             let children = page
                 .nodes
                 .iter()
-                .map(|node| OutputNode::Element(lower_node(node, &mut cx)))
+                .map(|node| lower_node(node, &mut cx))
                 .collect();
             LoweredPage {
                 name: page.name.clone(),
@@ -197,13 +256,94 @@ pub fn lower_site(doc: &Document, links: PageLinks) -> LoweredSite {
             }
         })
         .collect();
+    let components = doc
+        .components
+        .iter()
+        .map(|c| LoweredComponent {
+            name: cx.component_names[&c.id].clone(),
+            props: c
+                .props
+                .iter()
+                .map(|p| LoweredProp {
+                    name: p.name.clone(),
+                    kind: p.kind,
+                    default: cx.prop_value(p.kind, &p.default),
+                })
+                .collect(),
+            root: lower_component(c, &c.nodes, true, &mut cx),
+        })
+        .collect();
     let Lowering {
         mut rules,
         responsive,
         ..
     } = cx;
     rules.extend(responsive.into_iter().flatten());
-    LoweredSite { pages, rules }
+    LoweredSite {
+        pages,
+        components,
+        rules,
+    }
+}
+
+/// A PascalCase identifier made from `name`, such as `AboutUs`, prefixed with `prefix` if it
+/// would not start with a letter.
+pub fn pascal_case(name: &str, prefix: &str) -> String {
+    let mut out = String::new();
+    for word in name.split(|c: char| !c.is_ascii_alphanumeric()) {
+        let mut chars = word.chars();
+        if let Some(first) = chars.next() {
+            out.push(first.to_ascii_uppercase());
+            out.extend(chars);
+        }
+    }
+    match out.chars().next() {
+        Some(c) if c.is_ascii_alphabetic() => out,
+        _ => format!("{prefix}{out}"),
+    }
+}
+
+/// Lowers a component's `nodes` (its own, or an instance's expansion of them) inside a wrapper
+/// carrying the component's class. In a `template`, bound fields show their props.
+fn lower_component(c: &Component, nodes: &[Node], template: bool, cx: &mut Lowering) -> Element {
+    let saved_tree = std::mem::replace(&mut cx.tree, c.id.clone());
+    let saved_template = std::mem::replace(&mut cx.template, template);
+    cx.expanding.push(c.id.clone());
+    let children = nodes.iter().map(|n| lower_node(n, cx)).collect();
+    cx.expanding.pop();
+    cx.tree = saved_tree;
+    cx.template = saved_template;
+    let (class_name, _) = cx.class_for(("component".into(), c.id.clone()), &c.name);
+    element(
+        "div",
+        vec![("class", format!("blk-component {class_name}"))],
+        children,
+    )
+}
+
+fn lower_instance(
+    component: &str,
+    props: &BTreeMap<String, String>,
+    cx: &mut Lowering,
+) -> OutputNode {
+    let Some(c) = cx.doc.component(component) else {
+        return OutputNode::Text(String::new());
+    };
+    // A component that (by hand-editing) contains itself renders nothing the second time.
+    if cx.expanding.iter().any(|id| id == component) {
+        return OutputNode::Text(String::new());
+    }
+    let set = c
+        .props
+        .iter()
+        .filter_map(|p| Some((p.name.clone(), cx.prop_value(p.kind, props.get(&p.name)?))))
+        .collect();
+    let expanded = lower_component(c, &vellum_core::expand(c, props), false, cx);
+    OutputNode::Instance(Instance {
+        component: cx.component_names[&c.id].clone(),
+        props: set,
+        expanded,
+    })
 }
 
 struct Lowering<'a> {
@@ -211,6 +351,16 @@ struct Lowering<'a> {
     links: PageLinks<'a>,
     /// The page being lowered, for marking its nav link current.
     page: &'a Page,
+    /// The page or component whose nodes are being lowered.
+    tree: String,
+    /// Lowering a component template: bound fields become props, and no nav link is current.
+    template: bool,
+    /// Components being lowered, innermost last.
+    expanding: Vec<String>,
+    component_names: HashMap<String, String>,
+    /// Each node's class, by tree and node id, so every instance of a component shares its
+    /// classes and rules.
+    classes: HashMap<(String, String), String>,
     /// Class names are unique across the site, so every page can share one stylesheet.
     namer: ClassNamer,
     rules: Vec<CssRule>,
@@ -219,6 +369,26 @@ struct Lowering<'a> {
 }
 
 impl Lowering<'_> {
+    /// The class for `key`, and whether it was just made.
+    fn class_for(&mut self, key: (String, String), label: &str) -> (String, bool) {
+        if let Some(name) = self.classes.get(&key) {
+            return (name.clone(), false);
+        }
+        let name = self.namer.name(label);
+        self.classes.insert(key, name.clone());
+        (name, true)
+    }
+
+    /// A prop value as exports may use it: links are sanitized and point at pages, image URLs
+    /// are sanitized.
+    fn prop_value(&self, kind: PropKind, value: &str) -> String {
+        match kind {
+            PropKind::Text => value.to_owned(),
+            PropKind::Link => self.href(value),
+            PropKind::Image => safe_url(value, UrlUse::Image),
+        }
+    }
+
     /// A link's target, pointing site paths like `/about#team` at the target's page file.
     fn href(&self, href: &str) -> String {
         let href = href.trim();
@@ -232,14 +402,121 @@ impl Lowering<'_> {
     }
 }
 
-fn lower_node(node: &Node, cx: &mut Lowering) -> Element {
+fn lower_node(node: &Node, cx: &mut Lowering) -> OutputNode {
+    if let NodeKind::Instance { component, props } = &node.kind {
+        return lower_instance(component, props, cx);
+    }
     let label = match &node.kind {
         // `.svg` would read like an element selector in the stylesheet.
         NodeKind::Svg { .. } => "vector",
         NodeKind::Container { layout, .. } => layout.label(),
         _ => node.kind.type_name(),
     };
-    let class_name = cx.namer.name(label);
+    let (class_name, fresh) = cx.class_for((cx.tree.clone(), node.id.clone()), label);
+    if fresh {
+        push_rules(node, &class_name, cx);
+    }
+
+    // In a template, a bound field shows its prop rather than its own value.
+    let prop = |field: &str| {
+        cx.template
+            .then(|| node.bindings.get(field).cloned())
+            .flatten()
+    };
+    let text = |field: &str, value: &str| match prop(field) {
+        Some(p) => OutputNode::Prop(p),
+        None => OutputNode::Text(value.to_owned()),
+    };
+    let bind = |mut el: Element, field: &str, attr: &'static str| {
+        if let Some(p) = prop(field) {
+            el.attrs.retain(|(name, _)| *name != attr);
+            el.prop_attrs.push((attr, p));
+        }
+        el
+    };
+
+    // `block` is the element carrying the per-node class; some blocks wrap an inner element.
+    let block = |tag, base: &str, attrs: Vec<(&'static str, String)>, children| {
+        let mut all = vec![("class", format!("{base} {class_name}"))];
+        all.extend(attrs);
+        element(tag, all, children)
+    };
+    let wrap = |inner: Element| {
+        element(
+            "div",
+            vec![("class", class_name.clone())],
+            vec![OutputNode::Element(inner)],
+        )
+    };
+    let lowered = match &node.kind {
+        NodeKind::Heading { text: value, level } => {
+            // The canvas offers H1 to H3 and renders anything deeper as H3.
+            let tag = match level {
+                1 => "h1",
+                2 => "h2",
+                _ => "h3",
+            };
+            block(tag, "blk-heading", vec![], vec![text("text", value)])
+        }
+        NodeKind::Text { text: value } => block("p", "blk-text", vec![], vec![text("text", value)]),
+        NodeKind::Button { label, href } => {
+            let a = element(
+                "a",
+                vec![("class", "blk-button".into()), ("href", cx.href(href))],
+                vec![text("label", label)],
+            );
+            wrap(bind(a, "href", "href"))
+        }
+        NodeKind::Image { src, alt } => {
+            let img = element(
+                "img",
+                vec![
+                    ("class", "blk-image".into()),
+                    ("src", safe_url(src, UrlUse::Image)),
+                    ("alt", alt.clone()),
+                ],
+                vec![],
+            );
+            wrap(bind(bind(img, "src", "src"), "alt", "alt"))
+        }
+        NodeKind::Spacer { .. } => block(
+            "div",
+            "blk-spacer",
+            vec![("aria-hidden", "true".into())],
+            vec![],
+        ),
+        NodeKind::Svg { drawing } => wrap(lower_drawing(drawing)),
+        NodeKind::Container { children, .. } => {
+            let children = children.iter().map(|child| lower_node(child, cx)).collect();
+            block("div", "blk-container", vec![], children)
+        }
+        NodeKind::Nav {} => {
+            let links = cx
+                .doc
+                .pages
+                .iter()
+                .map(|page| {
+                    let mut attrs =
+                        vec![("class", "blk-nav-link".into()), ("href", (cx.links)(page))];
+                    if !cx.template && page.id == cx.page.id {
+                        attrs.push(("aria-current", "page".into()));
+                    }
+                    OutputNode::Element(element(
+                        "a",
+                        attrs,
+                        vec![OutputNode::Text(page.name.clone())],
+                    ))
+                })
+                .collect();
+            block("nav", "blk-nav", vec![], links)
+        }
+        NodeKind::Instance { .. } => unreachable!("handled above"),
+    };
+    OutputNode::Element(lowered)
+}
+
+/// The rule for a node's class, and its breakpoint overrides.
+fn push_rules(node: &Node, class_name: &str, cx: &mut Lowering) {
     let declarations = match &node.kind {
         NodeKind::Spacer { height } => vec![
             declaration("height", format!("{}px", fmt(*height))),
@@ -283,90 +560,6 @@ fn lower_node(node: &Node, cx: &mut Lowering) -> Element {
                 selector: format!(".{class_name}"),
                 declarations,
             });
-        }
-    }
-
-    // `block` is the element carrying the per-node class; some blocks wrap an inner element.
-    let block = |tag, base: &str, attrs: Vec<(&'static str, String)>, children| {
-        let mut all = vec![("class", format!("{base} {class_name}"))];
-        all.extend(attrs);
-        element(tag, all, children)
-    };
-    let wrap = |inner: Element| {
-        element(
-            "div",
-            vec![("class", class_name.clone())],
-            vec![OutputNode::Element(inner)],
-        )
-    };
-    match &node.kind {
-        NodeKind::Heading { text, level } => {
-            // The canvas offers H1 to H3 and renders anything deeper as H3.
-            let tag = match level {
-                1 => "h1",
-                2 => "h2",
-                _ => "h3",
-            };
-            block(
-                tag,
-                "blk-heading",
-                vec![],
-                vec![OutputNode::Text(text.clone())],
-            )
-        }
-        NodeKind::Text { text } => block(
-            "p",
-            "blk-text",
-            vec![],
-            vec![OutputNode::Text(text.clone())],
-        ),
-        NodeKind::Button { label, href } => wrap(element(
-            "a",
-            vec![("class", "blk-button".into()), ("href", cx.href(href))],
-            vec![OutputNode::Text(label.clone())],
-        )),
-        NodeKind::Image { src, alt } => wrap(element(
-            "img",
-            vec![
-                ("class", "blk-image".into()),
-                ("src", safe_url(src, UrlUse::Image)),
-                ("alt", alt.clone()),
-            ],
-            vec![],
-        )),
-        NodeKind::Spacer { .. } => block(
-            "div",
-            "blk-spacer",
-            vec![("aria-hidden", "true".into())],
-            vec![],
-        ),
-        NodeKind::Svg { drawing } => wrap(lower_drawing(drawing)),
-        NodeKind::Container { children, .. } => {
-            let children = children
-                .iter()
-                .map(|child| OutputNode::Element(lower_node(child, cx)))
-                .collect();
-            block("div", "blk-container", vec![], children)
-        }
-        NodeKind::Nav {} => {
-            let links = cx
-                .doc
-                .pages
-                .iter()
-                .map(|page| {
-                    let mut attrs =
-                        vec![("class", "blk-nav-link".into()), ("href", (cx.links)(page))];
-                    if page.id == cx.page.id {
-                        attrs.push(("aria-current", "page".into()));
-                    }
-                    OutputNode::Element(element(
-                        "a",
-                        attrs,
-                        vec![OutputNode::Text(page.name.clone())],
-                    ))
-                })
-                .collect();
-            block("nav", "blk-nav", vec![], links)
         }
     }
 }
@@ -467,6 +660,7 @@ fn element(
     Element {
         tag,
         attrs,
+        prop_attrs: Vec::new(),
         children,
     }
 }
@@ -584,7 +778,7 @@ pub fn print_css(rules: &[CssRule]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vellum_schema::Override;
+    use vellum_schema::{Component, Override};
 
     fn html_links(page: &Page) -> String {
         format!("{}.html", page.file_stem())
@@ -623,8 +817,129 @@ mod tests {
     fn child(el: &Element, i: usize) -> &Element {
         match &el.children[i] {
             OutputNode::Element(e) => e,
-            OutputNode::Text(_) => panic!("expected an element"),
+            OutputNode::Instance(i) => &i.expanded,
+            _ => panic!("expected an element"),
         }
+    }
+
+    /// `two_pages`, with the nav and button of each page made into one component: a "Site
+    /// header" whose button label and link are props. Home sets the label; About keeps the
+    /// defaults.
+    fn with_header() -> Document {
+        use std::collections::BTreeMap;
+        use vellum_schema::{PropDef, PropKind};
+        let mut doc = two_pages();
+        let mut button = doc.pages[0].nodes[1].clone();
+        button.bindings = BTreeMap::from([
+            ("label".into(), "cta".into()),
+            ("href".into(), "target".into()),
+        ]);
+        doc.components.push(Component {
+            id: "hdr".into(),
+            name: "Site header".into(),
+            props: vec![
+                PropDef {
+                    name: "cta".into(),
+                    kind: PropKind::Text,
+                    default: "Read more".into(),
+                },
+                PropDef {
+                    name: "target".into(),
+                    kind: PropKind::Link,
+                    default: "javascript:alert(1)".into(),
+                },
+            ],
+            nodes: vec![doc.pages[0].nodes[0].clone(), button],
+        });
+        for (i, page) in doc.pages.iter_mut().enumerate() {
+            let props = match i {
+                0 => BTreeMap::from([
+                    ("cta".into(), "Start".into()),
+                    ("target".into(), "/about".into()),
+                ]),
+                _ => BTreeMap::new(),
+            };
+            page.nodes = vec![Node::new(
+                format!("i{i}"),
+                NodeKind::Instance {
+                    component: "hdr".into(),
+                    props,
+                },
+            )];
+        }
+        doc
+    }
+
+    #[test]
+    fn instances_share_classes_and_fill_in_props() {
+        let site = lower_site(&with_header(), &html_links);
+        let OutputNode::Instance(home) = &site.pages[0].root.children[0] else {
+            panic!("instance");
+        };
+        let OutputNode::Instance(about) = &site.pages[1].root.children[0] else {
+            panic!("instance");
+        };
+        assert_eq!(home.component, "SiteHeader");
+        assert_eq!(
+            home.props,
+            [
+                ("cta".to_owned(), "Start".to_owned()),
+                ("target".to_owned(), "about.html".to_owned())
+            ]
+        );
+        assert!(about.props.is_empty());
+        assert_eq!(
+            attr(&home.expanded, "class"),
+            Some("blk-component site-header")
+        );
+        assert_eq!(
+            attr(&about.expanded, "class"),
+            attr(&home.expanded, "class")
+        );
+        let button = |e: &Element| child(child(e, 1), 0).clone();
+        assert_eq!(attr(&button(&home.expanded), "href"), Some("about.html"));
+        assert_eq!(
+            button(&home.expanded).children,
+            [OutputNode::Text("Start".into())]
+        );
+        assert_eq!(
+            attr(&button(&about.expanded), "href"),
+            Some("#"),
+            "sanitized default"
+        );
+        // The nav still marks the page it's on.
+        let current = |e: &Element, i| attr(child(child(e, 0), i), "aria-current").is_some();
+        assert!(current(&home.expanded, 0) && current(&about.expanded, 1));
+        // One rule per component node, not per instance.
+        let css = print_css(&site.rules);
+        assert_eq!(css.matches(".button {").count(), 1);
+        assert!(!css.contains(".button-2"));
+    }
+
+    #[test]
+    fn component_templates_show_their_props() {
+        let site = lower_site(&with_header(), &html_links);
+        let header = &site.components[0];
+        assert_eq!(header.name, "SiteHeader");
+        assert_eq!(header.props[1].default, "#");
+        let a = child(child(&header.root, 1), 0);
+        assert_eq!(a.children, [OutputNode::Prop("cta".into())]);
+        assert_eq!(a.prop_attrs, [("href", "target".to_owned())]);
+        assert_eq!(attr(a, "href"), None);
+        let nav = child(&header.root, 0);
+        assert!((0..2).all(|i| attr(child(nav, i), "aria-current").is_none()));
+    }
+
+    #[test]
+    fn a_component_inside_itself_renders_once() {
+        let mut doc = with_header();
+        let inner = doc.pages[1].nodes[0].clone();
+        doc.components[0].nodes.push(inner);
+        let site = lower_site(&doc, &html_links);
+        let OutputNode::Instance(home) = &site.pages[0].root.children[0] else {
+            panic!("instance");
+        };
+        assert_eq!(home.expanded.children[2], OutputNode::Text(String::new()));
     }
 
     #[test]

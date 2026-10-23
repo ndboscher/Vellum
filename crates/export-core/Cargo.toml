@@ -8,5 +8,6 @@ license.workspace = true
 [dependencies]
 vellum-schema.workspace = true
 vellum-vector.workspace = true
+vellum-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true

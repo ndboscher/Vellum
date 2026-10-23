@@ -1,0 +1,17 @@
+---
+source: crates/export-react/tests/react.rs
+expression: card
+---
+export default function PlanCard({ title = "Starter", price = "Free", signup = "/" }) {
+  return (
+    <div className="blk-component plan-card">
+      <div className="blk-container stack">
+        <h2 className="blk-heading heading-3">{title}</h2>
+        <p className="blk-text text-4">{price}</p>
+        <div className="button-3">
+          <a className="blk-button" href={signup}>Choose</a>
+        </div>
+      </div>
+    </div>
+  );
+}
