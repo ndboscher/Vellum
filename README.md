@@ -61,6 +61,7 @@ crates/
   export-core/   Exporter trait, registry, shared markup and CSS generation
   export-html/   Static HTML + CSS target
   export-react/  React (JSX/TSX) target
+  export-vue/    Vue 3 single-file component target
   cli/        The `vellum` command (`dev`, `serve`, `export`)
 ```
 

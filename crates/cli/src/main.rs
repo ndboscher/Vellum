@@ -59,6 +59,7 @@ fn registry() -> ExporterRegistry {
     registry
         .register(vellum_export_html::HtmlExporter)
         .and_then(|r| r.register(vellum_export_react::ReactExporter))
+        .and_then(|r| r.register(vellum_export_vue::VueExporter))
         .expect("built-in export targets have unique ids");
     registry
 }

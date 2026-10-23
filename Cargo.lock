@@ -2123,6 +2123,7 @@ dependencies = [
  "vellum-export-core",
  "vellum-export-html",
  "vellum-export-react",
+ "vellum-export-vue",
  "vellum-schema",
  "vellum-server",
 ]
@@ -2175,6 +2176,18 @@ dependencies = [
 
 [[package]]
 name = "vellum-export-react"
+version = "0.1.0"
+dependencies = [
+ "insta",
+ "serde",
+ "serde_json",
+ "vellum-export-core",
+ "vellum-export-html",
+ "vellum-schema",
+]
+
+[[package]]
+name = "vellum-export-vue"
 version = "0.1.0"
 dependencies = [
  "insta",

@@ -1,0 +1,23 @@
+---
+source: crates/export-vue/tests/vue.rs
+expression: "result.file(\"src/components/PlanCard.vue\").unwrap().contents"
+---
+<script setup>
+defineProps({
+  title: { type: String, default: "Starter" },
+  price: { type: String, default: "Free" },
+  signup: { type: String, default: "/" },
+});
+</script>
+
+<template>
+  <div class="blk-component plan-card">
+    <div class="blk-container stack">
+      <h2 class="blk-heading heading-3">{{ title }}</h2>
+      <p class="blk-text text-4">{{ price }}</p>
+      <div class="button-3">
+        <a class="blk-button" :href="signup">Choose</a>
+      </div>
+    </div>
+  </div>
+</template>
